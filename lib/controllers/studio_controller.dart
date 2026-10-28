@@ -81,6 +81,8 @@ class StudioController extends GetxController {
   final List<StreamSubscription<dynamic>> _subs = [];
   Timer? _debounce;
   int _renderToken = 0;
+  String _cachedPreIsolatedKey = '';
+  String _cachedPreIsolatedPath = '';
 
   /// 0 = Choose, 1 = Capture, 2 = Result — drives the step indicator.
   int get step => switch (phase.value) {
@@ -113,25 +115,25 @@ class StudioController extends GetxController {
   void selectTone(VocalTone t) {
     if (tone.value == t) return;
     tone.value = t;
-    _rerenderSoon();
+    _rerenderSoon(immediate: true);
   }
 
   void selectSpace(VocalSpace s) {
     if (space.value == s) return;
     space.value = s;
-    _rerenderSoon();
+    _rerenderSoon(immediate: true);
   }
 
   void selectPodcastTone(PodcastTone t) {
     if (podTone.value == t) return;
     podTone.value = t;
-    _rerenderSoon();
+    _rerenderSoon(immediate: true);
   }
 
   void selectLevel(EnhanceLevel l) {
     if (level.value == l) return;
     level.value = l;
-    _rerenderSoon();
+    _rerenderSoon(immediate: true);
   }
 
   void setStrength(double v) {
@@ -157,10 +159,14 @@ class StudioController extends GetxController {
     }
   }
 
-  void _rerenderSoon() {
+  void _rerenderSoon({bool immediate = false}) {
     if (phase.value != StudioPhase.result) return;
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 350), _rerender);
+    if (immediate) {
+      unawaited(_rerender());
+    } else {
+      _debounce = Timer(const Duration(milliseconds: 90), _rerender);
+    }
   }
 
   // ── capture ──────────────────────────────────────────────────────────────
@@ -232,6 +238,12 @@ class StudioController extends GetxController {
     stats.value = null;
     savedTo.value = '';
 
+    // Run Original A/B loudness normalization in parallel with vocal enhancement
+    final Future<String> normOrigFuture = AudioConvert.createNormalizedOriginal(
+      wavPath,
+      targetLufs: mode.value == EnhanceMode.vocals ? -14.0 : -16.0,
+    ).catchError((_) => wavPath);
+
     final _Computed? r = await _compute(wavPath);
     if (r == null) {
       phase.value = StudioPhase.select;
@@ -241,19 +253,16 @@ class StudioController extends GetxController {
     stats.value = r.stats;
     note.value = r.note;
     stage.value = 'Loading preview';
-    try {
-      originalNormalizedPath.value = await AudioConvert.createNormalizedOriginal(
-        wavPath,
-        targetLufs: mode.value == EnhanceMode.vocals ? -14.0 : -16.0,
-      );
-    } catch (_) {
-      originalNormalizedPath.value = wavPath;
-    }
+    originalNormalizedPath.value = await normOrigFuture;
     final String previewOrig = originalNormalizedPath.value.isNotEmpty
         ? originalNormalizedPath.value
         : wavPath;
-    originalWave.assignAll(await _peaks(previewOrig));
-    enhancedWave.assignAll(await _peaks(r.path));
+    final List<List<double>> waves = await Future.wait([
+      _peaks(previewOrig),
+      _peaks(r.path),
+    ]);
+    originalWave.assignAll(waves[0]);
+    enhancedWave.assignAll(waves[1]);
     listenOriginal.value = false;
     await _load(r.path, autoplay: true);
     phase.value = StudioPhase.result;
@@ -267,13 +276,23 @@ class StudioController extends GetxController {
     final String lv = level.value.id;
     String note0 = '';
 
-    stage.value = 'Isolating vocal & stripping noise';
-    progress.value = 0.10;
-    final String cleanInput = await AudioConvert.preIsolateVocal(
-      wavPath,
-      vocalsMode: vocals,
-      previewSeconds: preview10s.value ? 10.0 : null,
-    );
+    final String preKey = '$wavPath|$vocals|${preview10s.value}';
+    String cleanInput;
+    if (_cachedPreIsolatedKey == preKey &&
+        _cachedPreIsolatedPath.isNotEmpty &&
+        await File(_cachedPreIsolatedPath).exists()) {
+      cleanInput = _cachedPreIsolatedPath;
+    } else {
+      stage.value = 'Isolating vocal & stripping noise';
+      progress.value = 0.10;
+      cleanInput = await AudioConvert.preIsolateVocal(
+        wavPath,
+        vocalsMode: vocals,
+        previewSeconds: preview10s.value ? 10.0 : null,
+      );
+      _cachedPreIsolatedKey = preKey;
+      _cachedPreIsolatedPath = cleanInput;
+    }
 
     final AdminController? adm =
         Get.isRegistered<AdminController>() ? Get.find<AdminController>() : null;
@@ -290,7 +309,7 @@ class StudioController extends GetxController {
           level: lv,
           strength: strength.value,
         );
-        if (adm != null) unawaited(adm.syncFromMongo());
+        if (!allowCachedRestyle && adm != null) unawaited(adm.syncFromMongo());
         return _Computed(
           r.path,
           EnhanceStats(
@@ -367,7 +386,9 @@ class StudioController extends GetxController {
     stats.value = r.stats;
     note.value = r.note;
     savedTo.value = '';
-    enhancedWave.assignAll(await _peaks(r.path));
+    unawaited(_peaks(r.path).then((List<double> w) {
+      if (token == _renderToken) enhancedWave.assignAll(w);
+    }));
     if (!listenOriginal.value) {
       await _player.setFilePath(r.path);
       await _player.setVolume(1.0);

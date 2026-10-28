@@ -286,22 +286,29 @@ def clean_stage_cache(
     floor_in = round(pl.noise_floor_db(x), 1)
     spread_in = round(_snr_spread(x), 1)
 
-    va = analyze_voice(x)
+    if voice_isolation:
+        x_iso, _ = dn.denoise(x, strength=1.0, atten_lim_db=None, post_filter=True)
+        work_x = pl.spectral_gate(x_iso, depth_db=44.0, margin_db=8.5, hold_ms=65.0, release_ms=130.0)
+    else:
+        work_x = x
+
+    va = analyze_voice(work_x)
+    voiced = va["track"]["voiced"]
     prof = vocal_profile(va) if mode == "vocals" else {"hpf": 75.0}
 
     cb("Removing background noise", 0.25)
-    x_clean = pl.highpass(x, float(prof["hpf"]))
+    x_clean = pl.highpass(work_x, float(prof["hpf"]))
     x_clean, engine = dn.denoise(
         x_clean,
-        strength=1.0 if (mode == "podcast" or voice_isolation) else 0.9,
+        strength=1.0,
         atten_lim_db=None,
-        post_filter=(mode == "podcast" or voice_isolation),
+        post_filter=True,
     )
 
     cb("Removing room echo", 0.55)
     x_clean = dereverb(
         x_clean,
-        amount=0.55 if mode == "podcast" else 0.2,
+        amount=0.55 if mode == "podcast" else 0.25,
         t60=0.45 if mode == "podcast" else 0.5,
     )
     return {
@@ -343,6 +350,7 @@ def style_from_cache(
         "spread_in_db": cache.get("spread_in", 15.0),
         "f0_median_hz": round(float(va.get("f0_median") or 0.0), 1),  # type: ignore[union-attr]
         "voice_type": va.get("voice_type", "unknown"),  # type: ignore[union-attr]
+        "voice_isolation": bool(cache.get("voice_isolation", False)),
         "cached_restyle": True,
     }
 
@@ -358,11 +366,14 @@ def style_from_cache(
             SR,
             extra=tone_curve(eq),
         )
-        x, _ = pl.deess(x, SR, center=prof["deess_hz"], amount=0.75)
+        x, _ = pl.deess(x, SR, center=prof["deess_hz"], amount=0.85)
         x = pl.level(x, SR, target_db=-21.0, max_up=7.0, max_down=6.0)
         x, gr = pl.compress(x, SR, thr_db=-24.0, ratio=2.8, attack_ms=10, release_ms=130)
         report["compressor_peak_gr_db"] = round(gr, 1)
-        x = pl.spectral_gate(x, depth_db=20.0, margin_db=6.0, hold_ms=140.0, release_ms=260.0, voiced=voiced)
+        x, _ = pl.deess(x, SR, center=prof["deess_hz"], amount=0.80)
+        x = pl.spectral_gate(x, depth_db=34.0, margin_db=5.5, hold_ms=110.0, release_ms=200.0, voiced=voiced)
+        x = pl.dominant_expander(x, rel_db=-22.0, depth_db=22.0)
+        x = pl.apply_speech_gate(x, SR, pause_floor_db=-64.0, hold_ms=140.0, look_ms=15.0)
         x = pl.warmth(x, prof["warmth"])
         x = pl.apply_space(x, space_cfg(space), SR)
         x = ld.normalize_lufs(x, -14.0, ceiling_db=-1.0)
@@ -392,7 +403,10 @@ def style_from_cache(
         if w_amt > 0:
             x = pl.warmth(x, w_amt)
         x, _ = pl.deess(x, SR, center=ch["deess_hz"], amount=ch["deess"])
-        x = pl.spectral_gate(x, depth_db=32.0, margin_db=5.0, hold_ms=80.0, release_ms=160.0, voiced=voiced)
+        x = pl.spectral_gate(x, depth_db=36.0, margin_db=5.5, hold_ms=80.0, release_ms=150.0, voiced=voiced)
+        x = pl.dominant_expander(x, rel_db=-20.0, depth_db=24.0)
+        x = pl.apply_speech_gate(x, SR, pause_floor_db=-66.0, hold_ms=120.0, look_ms=15.0)
+        x, _ = pl.deess(x, SR, center=ch["deess_hz"], amount=min(0.95, float(ch["deess"]) + 0.08))
         sp_type = str(tcfg.get("space", "theatre" if tcfg.get("theatre") else ""))
         if sp_type:
             x = pl.podcast_space(x, sp_type, SR)

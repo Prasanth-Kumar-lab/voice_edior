@@ -218,17 +218,28 @@ class SpectralDenoiser(private val sr: Int) {
     }
 
     private fun frame() {
-        for (i in 0 until N) {
-            re[i] = inRing[(inPos + i) % N] * win[i]
-            im[i] = 0.0
-        }
-        fft.transform(re, im)
+        val a = amount.coerceIn(0.0, 1.0)
         // The first N/HOP frames still contain the zero-filled start-up buffer; learning from them
         // would pin the noise floor near zero for the whole 3 s memory. Pass them through untouched.
-        if (warm < N / HOP) warm++ else filter(amount.coerceIn(0.0, 1.0))
-        fft.inverse(re, im)
-        val scale = 0.5 // sqrt-Hann in/out at 75% overlap sums to 2
-        for (i in 0 until N) outRing[(outPos + i) % N] += re[i] * win[i] * scale
+        if (warm < N / HOP) {
+            warm++
+        } else if (a > 1e-4) {
+            for (i in 0 until N) {
+                re[i] = inRing[(inPos + i) % N] * win[i]
+                im[i] = 0.0
+            }
+            fft.transform(re, im)
+            filter(a)
+            fft.inverse(re, im)
+            val scale = 0.5 // sqrt-Hann in/out at 75% overlap sums to 2
+            for (i in 0 until N) outRing[(outPos + i) % N] += re[i] * win[i] * scale
+            return
+        }
+        val scale = 0.5
+        for (i in 0 until N) {
+            val w = win[i]
+            outRing[(outPos + i) % N] += inRing[(inPos + i) % N] * (w * w * scale)
+        }
     }
 
     /** Learns the noise floor from the spectrum in [re]/[im] and attenuates it in place. */

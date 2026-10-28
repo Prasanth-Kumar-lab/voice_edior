@@ -10,6 +10,7 @@ import kotlin.math.log10
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -122,5 +123,29 @@ class EnhancerTest {
         println("mastering: ${"%.2f".format(lufs)} LUFS, peak ${"%.2f".format(peak)} dBFS")
         assertTrue("peak <= -1 dBFS, got $peak", peak <= -0.99)
         assertTrue("loudness within 1 LU of target, got $lufs", abs(lufs + 16.0) < 1.0)
+    }
+
+    @Test fun cachedFilterRestyleIsSignificantlyFasterThanInitialClean() {
+        val (v, _) = voice(135.0, 8.0)
+        val nz = noise(-44.0, v.size)
+        val noisy = FloatArray(v.size) { v[it] + nz[it] }
+        val dir = createTempDir("vpfast")
+        val inF = File(dir, "in.wav")
+        val out1 = File(dir, "out1.wav")
+        val out2 = File(dir, "out2.wav")
+        WavFile.write(inF.path, PcmClip(noisy, sr))
+
+        val t0 = System.nanoTime()
+        val r1 = Enhancer.run(inF.path, out1.path, "podcast", "general_bass", "dry", "enhanced")
+        val firstMs = (System.nanoTime() - t0) / 1_000_000.0
+
+        val t1 = System.nanoTime()
+        val r2 = Enhancer.run(inF.path, out2.path, "podcast", "theatrical", "dry", "enhanced")
+        val secondMs = (System.nanoTime() - t1) / 1_000_000.0
+
+        println("Initial clean+enhance: %.1f ms, cached filter switch (theatrical): %.1f ms".format(firstMs, secondMs))
+        assertTrue("Cached restyle should be faster than initial clean ($secondMs ms vs $firstMs ms)", secondMs < firstMs)
+        assertTrue("Cached theatrical restyle hits target loudness", abs(r2.lufsOut + 16.0) < 1.0)
+        assertEquals(r1.f0, r2.f0)
     }
 }

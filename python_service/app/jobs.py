@@ -210,21 +210,19 @@ class JobStore:
                 if len(x) > max_samples:
                     x = x[:max_samples]
 
-            # Cache Stage 1 (Clean) so subsequent preset switches on Result screen take <1s
+            # Run Stage 1 (Clean) once and cache it, then run Stage 2 (Style) from cache (2x faster initial + <1s restyle)
             job.clean_cache = clean_stage_cache(
                 job.mode, x, sr, cb, voice_isolation=job.voice_isolation
             )
-            y, report = enhance(
-                job.mode,
-                x,
-                sr,
-                cb,
+            cb("Polishing voice & mastering", 0.78)
+            y, report = style_from_cache(
+                job.clean_cache,
                 eq=job.eq,
                 space=job.space,
                 level=job.level,
                 strength=job.strength,
-                voice_isolation=job.voice_isolation,
             )
+            report["cached_restyle"] = False
             if job.cancelled:
                 raise JobCancelError("Job cancelled by user")
 

@@ -7,6 +7,7 @@ import com.example.voice_edior.dsp.VocalChain
 import com.example.voice_edior.dsp.VocalFx
 import com.example.voice_edior.dsp.VocalIsolator
 import com.example.voice_edior.dsp.VoiceInfo
+import java.io.File
 
 class EnhanceResult(
     val path: String, val durationMs: Int, val lufsIn: Double, val lufsOut: Double,
@@ -17,6 +18,10 @@ class EnhanceResult(
 /**
  * On-device premium pass: pitch analysis → harmonic vocal isolation → two-stage noise removal
  * → mode chain (EQ + dynamics + de-ess) → final zero-noise gate → space → loudness.
+ *
+ * Includes an in-memory [CleanedVocalCache] so switching filters/tones/spaces/intensity on the
+ * Result screen skips file decoding, pitch analysis, STFT vocal isolation, and FFT denoising,
+ * applying new filters in ~30–60 ms.
  */
 object Enhancer {
     private val flat = VocalFx(
@@ -24,31 +29,74 @@ object Enhancer {
         compMakeupDb = 0f, limiterCeilingDb = 0f,
     )
 
+    private class CleanedVocalCache(
+        val key: String,
+        val sr: Int,
+        val lufsIn: Double,
+        val floorIn: Double,
+        val info: VoiceInfo,
+        val pass1: FloatArray,
+        val cleanMatched: FloatArray,
+    )
+
+    @Volatile
+    private var cachedClean: CleanedVocalCache? = null
+
     fun run(
         inPath: String, outPath: String, mode: String, tone: String = "natural", space: String = "dry",
         level: String = "enhanced", strength: Float = 1.0f,
         progress: (String, Float) -> Unit = { _, _ -> },
     ): EnhanceResult {
-        progress("Reading recording", 0.05f)
-        val clip = WavFile.read(inPath)
-        val sr = clip.sampleRate
-        val x = clip.samples
-        val lufsIn = Mastering.integratedLufs(x, sr)
-        val floorIn = Mastering.noiseFloorDb(x, sr)
         val vocals = mode == "vocals"
-        progress("Analyzing voice & pitch", 0.14f)
-        val info = PitchAnalyzer.analyze(x, sr)
+        val targetLufs = if (vocals) -14.0 else -16.0
+        val inFile = File(inPath)
+        val cacheKey = "$inPath|${inFile.length()}|${inFile.lastModified()}|$vocals"
+
+        var cache = cachedClean
+        if (cache == null || cache.key != cacheKey) {
+            progress("Reading recording", 0.05f)
+            val clip = WavFile.read(inPath)
+            val sr = clip.sampleRate
+            val x = clip.samples
+            val lufsIn = Mastering.integratedLufs(x, sr)
+            val floorIn = Mastering.noiseFloorDb(x, sr)
+
+            progress("Analyzing voice & pitch", 0.14f)
+            val info = PitchAnalyzer.analyze(x, sr)
+            val f0 = if (info.f0Median > 0f) info.f0Median else 160f
+            val p10 = if (info.f0P10 > 0f) info.f0P10 else f0 * 0.8f
+            val baseHpf = (0.65f * p10).coerceIn(70f, 125f)
+
+            // Stage 1: Offline Harmonic + Multi-Band Spectral Vocal Isolator (run ONCE per recording)
+            progress("Isolating vocal & removing background noise", 0.28f)
+            val isolated = VocalIsolator.isolate(x, sr, info.f0Median, vocalsMode = vocals)
+            val step1 = process(isolated, sr, flat.copy(hpfHz = baseHpf, denoise = 1.0f))
+            val pass1 = process(step1, sr, flat.copy(hpfHz = baseHpf, denoise = 0.85f))
+
+            val cleanMatched = pass1.copyOf()
+            Mastering.normalize(cleanMatched, targetLufs, -1.0, sr)
+
+            cache = CleanedVocalCache(
+                key = cacheKey,
+                sr = sr,
+                lufsIn = lufsIn,
+                floorIn = floorIn,
+                info = info,
+                pass1 = pass1,
+                cleanMatched = cleanMatched,
+            )
+            cachedClean = cache
+        }
+
+        val sr = cache.sr
+        val info = cache.info
+        val pass1 = cache.pass1
         val fx = if (vocals) ModeFx.vocals(info, tone, space) else ModeFx.podcast(if (tone == "natural") "general_bass" else tone, level, info)
 
-        // Stage 1: Offline Harmonic + Multi-Band Spectral Vocal Isolator (removes background noise, music & 'sshhh' hiss)
-        progress("Isolating vocal & removing background noise", 0.28f)
-        val isolated = VocalIsolator.isolate(x, sr, info.f0Median, vocalsMode = vocals)
-        val pass1 = process(isolated, sr, flat.copy(hpfHz = fx.hpfHz, denoise = 1.0f))
-
-        // Stage 2: Voice shaping, dynamics, exciter + active de-esser so sibilance ('sshhh') is suppressed
-        progress("Polishing the voice", 0.52f)
+        // Stage 2: Instant zero-FFT voice shaping, dynamics, exciter + active de-esser
+        progress("Applying studio filter", 0.55f)
         val chain = fx.copy(
-            denoise = 0.85f,
+            denoise = 0f,
             hpfHz = fx.hpfHz,
             gateOn = false,
             reverbMix = 0f,
@@ -61,7 +109,7 @@ object Enhancer {
         }
 
         // Stage 3: Final clean gate after leveling/compression so pauses drop to studio black
-        progress("Final clean", 0.72f)
+        progress("Final clean", 0.75f)
         val gateDb = gateThresholdDb(shaped, sr, if (vocals) 8.5 else 9.5)
         var y = process(
             shaped,
@@ -76,7 +124,7 @@ object Enhancer {
 
         // Stage 4: Space comes after the gate (band-limited 240 Hz - 3.2 kHz inside VocalChain so no 'sshhh' tail)
         if (fx.reverbMix > 0.001f) {
-            progress("Adding studio space", 0.82f)
+            progress("Adding studio space", 0.84f)
             val tail = (ModeFx.reverbTailSeconds(space) * sr).toInt()
             y = process(
                 y, sr,
@@ -94,14 +142,12 @@ object Enhancer {
             y[i] = lpFinal.process(y[i].toDouble()).toFloat()
         }
 
-        progress("Mastering loudness", 0.9f)
-        val targetLufs = if (vocals) -14.0 else -16.0
+        progress("Mastering loudness", 0.92f)
         Mastering.normalize(y, targetLufs, -1.0, sr)
 
         val blend = strength.coerceIn(0f, 1f)
         if (blend < 0.999f) {
-            val cleanMatched = pass1.copyOf()
-            Mastering.normalize(cleanMatched, targetLufs, -1.0, sr)
+            val cleanMatched = cache.cleanMatched
             val n = minOf(y.size, cleanMatched.size)
             for (i in 0 until n) {
                 y[i] = (1f - blend) * cleanMatched[i] + blend * y[i]
@@ -128,8 +174,8 @@ object Enhancer {
         }
         progress("Done", 1f)
         return EnhanceResult(
-            outPath, (y.size * 1000L / sr).toInt(), lufsIn, Mastering.integratedLufs(y, sr),
-            floorIn, Mastering.noiseFloorDb(y, sr), info.f0Median, info.type, isStereo,
+            outPath, (y.size * 1000L / sr).toInt(), cache.lufsIn, Mastering.integratedLufs(y, sr),
+            cache.floorIn, Mastering.noiseFloorDb(y, sr), info.f0Median, info.type, isStereo,
         )
     }
 
