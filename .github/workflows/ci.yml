@@ -1,0 +1,64 @@
+name: VocalPolish CI (Flutter + Kotlin DSP + FastAPI)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  flutter-and-kotlin:
+    name: Flutter Analyze, Test & Kotlin DSP Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Run Flutter Analyzer (0 issues enforced)
+        run: flutter analyze
+
+      - name: Run Flutter Unit & Widget Tests
+        run: flutter test
+
+      - name: Run Android Kotlin DSP Unit Tests
+        working-directory: android
+        run: ./gradlew testDebugUnitTest
+
+  python-dsp-and-security:
+    name: Python FastAPI DSP & Security Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system audio libs
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libsndfile1
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r python_service/requirements.txt
+
+      - name: Run Python Security, Pipeline & Mix Engine Unit Tests
+        env:
+          VP_IN_MEMORY_DB: "1"
+        run: python -m unittest discover -s python_service/tests -p "test_*.py" -v

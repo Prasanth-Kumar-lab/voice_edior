@@ -105,7 +105,7 @@ class _NavPill extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
         decoration: BoxDecoration(
           borderRadius: AppRadius.chip,
           gradient: selected ? AppColors.signature : null,
@@ -116,10 +116,10 @@ class _NavPill extends StatelessWidget {
           children: [
             Icon(
               icon,
-              size: 20,
+              size: 19,
               color: selected ? Colors.white : AppColors.muted(brightness),
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Text(
               label,
               style: textTheme.labelLarge?.copyWith(

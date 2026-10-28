@@ -15,6 +15,11 @@ def highpass(x: np.ndarray, hz: float, sr: int = 48000, order: int = 2) -> np.nd
     return sosfiltfilt(sos, x).astype(np.float32)
 
 
+def lowpass(x: np.ndarray, hz: float, sr: int = 48000, order: int = 2) -> np.ndarray:
+    sos = butter(order, min(hz, sr * 0.48) / (sr / 2), "lowpass", output="sos")
+    return sosfiltfilt(sos, x).astype(np.float32)
+
+
 def _frame_db(x: np.ndarray, win_frames: int = 1) -> np.ndarray:
     n = (len(x) // CH) * CH
     p = (x[:n].reshape(-1, CH).astype(np.float64) ** 2).mean(axis=1)
@@ -227,7 +232,7 @@ def plate(x: np.ndarray, sr: int = 48000, mix_db: float = -22.0, t60: float = 1.
     ir[: int(predelay_ms * 1e-3 * sr)] = 0
     ir /= np.sqrt(np.sum(ir ** 2)) + 1e-9
     wet = oaconvolve(x, ir, mode="full")[: len(x)]
-    wet = highpass(wet.astype(np.float32), 220.0, sr)
+    wet = lowpass(highpass(wet.astype(np.float32), 240.0, sr), 3200.0, sr)
     wet *= 10 ** (mix_db / 20) * np.sqrt(np.mean(x ** 2) + 1e-12) / (np.sqrt(np.mean(wet ** 2)) + 1e-12)
     return (x + wet).astype(np.float32)
 
@@ -347,15 +352,16 @@ def apply_space(x: np.ndarray, cfg: dict, sr: int = 48000) -> np.ndarray:
     wets = []
     for seed in (4, 9):
         w = oaconvolve(x, _ir(t60, damp, pre, sr, seed), mode="full")[: len(x)]
-        w = highpass(w.astype(np.float32), 220.0, sr)
+        # Band-limit wet reverb (240 - 3200 Hz) so sibilance & noise never ring as 'sshhh'
+        w = lowpass(highpass(w.astype(np.float32), 240.0, sr), 3200.0, sr)
         w *= 10 ** (mix_db / 20) * ref / (np.sqrt(np.mean(w[:n_in] ** 2)) + 1e-12)
         wets.append(w)
     left, right = x + wets[0], x + wets[1]
     if width > 0.6:
-        # Haas-style widening of the dry voice: highpassed copies, delayed ~14 / 19 ms, opposite polarity of sides
-        side = highpass(x, 300.0, sr)
+        # Band-limited warm mid widening (250 - 2500 Hz) so highs stay centered and never comb-filter into 'sshhh'
+        side = lowpass(highpass(x, 250.0, sr), 2500.0, sr)
         dl, dr = int(0.014 * sr), int(0.019 * sr)
-        gl = 10 ** (-(14 - 5 * width) / 20)
+        gl = 10 ** (-(16 - 4 * width) / 20)
         left = left + gl * np.concatenate([np.zeros(dl, np.float32), side[:-dl]])
         right = right - gl * np.concatenate([np.zeros(dr, np.float32), side[:-dr]])
     return np.stack([left, right], axis=1).astype(np.float32)
@@ -364,26 +370,19 @@ def apply_space(x: np.ndarray, cfg: dict, sr: int = 48000) -> np.ndarray:
 # ───────────────────────────── voice enhancement ─────────────────────────────
 
 def exciter(x: np.ndarray, sr: int = 48000, amount: float = 0.4, freq: float = 3200.0) -> np.ndarray:
-    """Harmonic exciter: generates new high-frequency detail from the 2–6 kHz voice band.
-
-    Phone and laptop mics roll off above ~8 kHz; a soft nonlinearity on the presence band creates harmonics
-    there, which restores the 'air' of a studio condenser. Only the *generated* harmonics are mixed back.
-    """
+    """Clean, speech-gated upper-harmonic presence lift (never amplifies noise floor into 'sshhh' hiss)."""
     if amount <= 0.01:
         return x
-    band = highpass(x, freq)
-    ref = float(np.percentile(np.abs(band), 99)) + 1e-6
-    drive = 2.5 + 3.0 * amount
-    harm = np.tanh(band / ref * drive) * ref
-    harm = highpass(harm.astype(np.float32), freq * 1.7)
+    sos_air = butter(2, [5500.0 / (sr / 2), 11000.0 / (sr / 2)], "bandpass", output="sos")
+    air_band = sosfiltfilt(sos_air, x).astype(np.float32)
 
     lvl = _frame_db(x, 2)
     p15 = float(np.percentile(lvl, 15))
     p85 = float(np.percentile(lvl, 85))
-    speech_thr = max(p15 + 10.0, p85 - 20.0)
+    speech_thr = max(p15 + 12.0, p85 - 18.0)
 
     active = lvl > speech_thr
-    hold = int(0.08 * sr / CH)
+    hold = int(0.06 * sr / CH)
     g = np.zeros(len(lvl))
     h = 0
     for i in range(len(lvl)):
@@ -393,12 +392,8 @@ def exciter(x: np.ndarray, sr: int = 48000, amount: float = 0.4, freq: float = 3
         if h > 0:
             h -= 1
     g = uniform_filter1d(g, int(0.02 * sr / CH), mode="nearest")
-
-    voiced_rms = np.sqrt(np.mean(x[np.abs(x) > 0.01 * ref] ** 2) + 1e-12) if np.any(np.abs(x) > 0.01 * ref) else 0.1
-    h_rms = np.sqrt(np.mean(harm ** 2) + 1e-12)
-    gain = amount * 0.22 * voiced_rms / h_rms
-    harm = harm * _to_samples(g, len(harm))
-    return (x + harm * gain).astype(np.float32)
+    gate_samp = _to_samples(g, len(x))
+    return (x + air_band * (amount * 1.35) * gate_samp).astype(np.float32)
 
 
 def parallel_compress(x: np.ndarray, sr: int = 48000, amount: float = 0.25) -> np.ndarray:
@@ -456,6 +451,28 @@ def voice_bass(x: np.ndarray, f0: float, sr: int = 48000, amount: float = 0.6) -
     return (x + chest + sub).astype(np.float32)
 
 
+def voice_pitch_body(x: np.ndarray, f0: float, sr: int = 48000, amount: float = 0.3) -> np.ndarray:
+    """Pitch-adaptive vocal body & clear voice stabilizer.
+    Directly reinforces the speaker's true fundamental pitch (f0) while strictly attenuating
+    sub-vocal rumble (< 0.65 * f0) and boxy mud (250-380 Hz) so the voice remains clear, articulate, and natural.
+    """
+    if amount <= 0.01 or f0 <= 40.0:
+        return x
+    f0_clamped = float(np.clip(f0, 65.0, 320.0))
+    bw = f0_clamped * 0.45
+    low_cut = max(40.0, f0_clamped * 0.65)
+    sos_fund = butter(2, [low_cut / (sr / 2), min(sr * 0.45, f0_clamped + bw) / (sr / 2)], "bandpass", output="sos")
+    fund = sosfiltfilt(sos_fund, x).astype(np.float32)
+
+    env_sos = butter(2, 16.0 / (sr / 2), "lowpass", output="sos")
+    env = np.maximum(sosfiltfilt(env_sos, np.abs(x)), 0.0).astype(np.float32)
+    ref = float(np.percentile(env, 95)) + 1e-9
+    drive = np.clip(env / ref, 0.0, 1.2)
+
+    reinforced = fund * (0.65 * amount) * drive
+    return (x + reinforced).astype(np.float32)
+
+
 def theatre_space(x: np.ndarray, sr: int = 48000, mix_db: float = -20.0) -> np.ndarray:
     """Dark, wide cinema-hall ambience behind the voice (stereo). Applied after the pause gate, so only the
     voice itself rings into the room – the background noise never does."""
@@ -463,30 +480,26 @@ def theatre_space(x: np.ndarray, sr: int = 48000, mix_db: float = -20.0) -> np.n
 
 
 def voice_treble(x: np.ndarray, sr: int = 48000, amount: float = 0.6) -> np.ndarray:
-    """Speech-following high-definition treble & air synthesizer (3.5–16 kHz).
+    """Speech-following high-definition articulation & air shaper (2.6–11 kHz).
 
-    Generates crisp upper-harmonic shimmer and consonant clarity from the vocal presence band,
-    strictly gated by the speech envelope so treble never creates hiss during pauses.
+    Lifts vocal articulation and upper harmonics strictly during active speech without nonlinear
+    noise floor amplification, preventing any 'sshhh' hiss on the vocal.
     """
     if amount <= 0.01 or len(x) < sr // 10:
         return x
-    hi_band = highpass(x, 3600.0, sr)
-    ref = float(np.percentile(np.abs(hi_band), 99)) + 1e-6
-    shimmer = (np.tanh(hi_band / ref * (2.2 + 2.8 * amount)) + 0.25 * (hi_band / ref) ** 2) * ref
-    shimmer = highpass(shimmer.astype(np.float32), 5200.0, sr)
-
-    sos_pres = butter(2, [2800.0 / (sr / 2), 6200.0 / (sr / 2)], "bandpass", output="sos")
+    sos_pres = butter(2, [2600.0 / (sr / 2), 5500.0 / (sr / 2)], "bandpass", output="sos")
     pres = sosfiltfilt(sos_pres, x).astype(np.float32)
+
+    sos_air = butter(2, [6000.0 / (sr / 2), 11000.0 / (sr / 2)], "bandpass", output="sos")
+    air = sosfiltfilt(sos_air, x).astype(np.float32)
 
     env_sos = butter(2, 20.0 / (sr / 2), "lowpass", output="sos")
     env = np.maximum(sosfiltfilt(env_sos, np.abs(x)), 0.0).astype(np.float32)
     env_ref = float(np.percentile(env, 92)) + 1e-9
-    gate = np.clip((env - 0.08 * env_ref) / (0.35 * env_ref), 0.0, 1.2)
+    gate = np.clip((env - 0.12 * env_ref) / (0.35 * env_ref), 0.0, 1.0)
 
-    voice_rms = float(np.sqrt(np.mean(x[env > 0.1 * env_ref] ** 2) + 1e-12)) if np.any(env > 0.1 * env_ref) else 0.05
-    shim_rms = float(np.sqrt(np.mean(shimmer ** 2) + 1e-12))
-    air_layer = shimmer * (0.28 * amount * voice_rms / shim_rms) * gate
     pres_layer = pres * (0.45 * amount) * gate
+    air_layer = air * (0.85 * amount) * gate
     return (x + pres_layer + air_layer).astype(np.float32)
 
 

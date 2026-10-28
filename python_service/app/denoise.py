@@ -74,35 +74,68 @@ def remove_transient_pins(x: np.ndarray, threshold: float = 4.2) -> np.ndarray:
     return x
 
 
-def spectral_denoise(x: np.ndarray, amount: float = 0.85, sr: int = 48000) -> np.ndarray:
-    """Multi-stage voice-safe denoiser: pin/click suppressor, noise-profile reduction, and Wiener filtering."""
+def spectral_denoise(x: np.ndarray, amount: float = 0.95, sr: int = 48000) -> np.ndarray:
+    """Multi-stage vocal isolator & denoiser: pin/click suppressor, stationary + non-stationary
+    music/noise reduction, decision-directed Wiener filtering, and high-band anti-'sshhh' suppression.
+    """
     x = remove_transient_pins(x)
 
-    # 1. Multi-band noise profiling via noisereduce if available
+    # 1. Dual-pass noise & background music profiling via noisereduce if available
     try:
         import noisereduce as nr
         win = int(0.04 * sr)
         n = (len(x) // win) * win
         if n >= win * 4:
             rms = np.sqrt((x[:n].reshape(-1, win).astype(np.float64) ** 2).mean(axis=1))
-            p15 = float(np.percentile(rms, 15))
-            noise_seg = x[:n].reshape(-1, win)[rms <= max(p15, 1e-6)].flatten()
+            p25 = float(np.percentile(rms, 25))
+            noise_seg = x[:n].reshape(-1, win)[rms <= max(p25, 1e-6)].flatten()
             y_noise = noise_seg if len(noise_seg) >= win else None
-            x = nr.reduce_noise(y=x, sr=sr, y_noise=y_noise, stationary=True, prop_decrease=min(1.0, 0.88 + 0.1 * amount))
+            x = nr.reduce_noise(
+                y=x,
+                sr=sr,
+                y_noise=y_noise,
+                stationary=True,
+                prop_decrease=min(1.0, 0.94 + 0.05 * amount),
+            )
+            x = nr.reduce_noise(
+                y=x,
+                sr=sr,
+                stationary=False,
+                prop_decrease=min(0.95, 0.78 + 0.15 * amount),
+            )
     except Exception:
         pass
 
-    # 2. Decision-directed Wiener filter with lower noise floor limit
-    N, hop = 512, 128
+    # 2. High-resolution STFT Wiener filter + high-band spectral flatness ('sshhh') suppressor
+    N, hop = 1024, 256
     B = N // 2 + 1
     f, t, X = stft(x, sr, window="hann", nperseg=N, noverlap=N - hop, boundary="zeros", padded=True)
-    P = np.abs(X) ** 2 + 1e-9
+    P = np.abs(X) ** 2 + 1e-11
     nf = P.shape[1]
+
+    # Identify non-vocal frames from vocal core energy (120 - 3600 Hz)
+    v_mask = (f >= 120.0) & (f <= 3600.0)
+    hi_mask = (f >= 3800.0) & (f <= 12000.0)
+    v_db = 10.0 * np.log10(P[v_mask].mean(axis=0) + 1e-12)
+    p20, p85 = float(np.percentile(v_db, 20)), float(np.percentile(v_db, 85))
+    speech_thr = max(p20 + 4.5, p85 - 20.0)
+    non_vocal = v_db <= speech_thr
+
+    if np.sum(non_vocal) >= 4:
+        global_floor = np.percentile(P[:, non_vocal], 65, axis=1)
+    else:
+        global_floor = np.percentile(P, 22, axis=1)
+
+    # High-band spectral flatness per frame (detects white-noise 'sshhh' hiss above 3.8 kHz)
+    P_hi = P[hi_mask] + 1e-12
+    flat_hi = np.exp(np.mean(np.log(P_hi), axis=0)) / (np.mean(P_hi, axis=0) + 1e-12)
+    flat_hi = np.clip(flat_hi, 0.0, 1.0)
+
     Ps = np.empty_like(P)
     Ps[:, 0] = P[:, 0]
     for i in range(1, nf):
-        Ps[:, i] = 0.7 * Ps[:, i - 1] + 0.3 * P[:, i]
-    V, U = 75, 15
+        Ps[:, i] = 0.65 * Ps[:, i - 1] + 0.35 * P[:, i]
+    V, U = 50, 12
     sub_min = []
     cur = Ps[:, 0].copy()
     noise = np.empty_like(P)
@@ -118,16 +151,25 @@ def spectral_denoise(x: np.ndarray, amount: float = 0.85, sr: int = 48000) -> np
             cur = Ps[:, i].copy()
             sub_min = sub_min[-U:]
         m = np.minimum(m, median_filter(m, size=9, mode="nearest"))
-        noise[:, i] = 2.5 * m
-    beta = 1.0 + 2.0 * amount
-    floor = 10 ** (-(12 + 30 * amount) / 20)
+        noise[:, i] = np.maximum(global_floor * 2.2, 3.2 * m)
+
+    beta = 1.8 + 2.5 * amount
+    floor = 10 ** (-(16 + 34 * amount) / 20)
     G = np.ones_like(P)
     gp = np.ones(B)
     gam_prev = np.ones(B)
+    hi_bins = f >= 3800.0
+    ultra_bins = f >= 12000.0
+
     for i in range(nf):
-        gam = P[:, i] / np.maximum(noise[:, i], 1e-9)
-        xi = 0.97 * gp * gp * gam_prev + 0.03 * np.maximum(gam - 1, 0)
+        over_sub = np.where(hi_bins, 1.8 + 2.5 * flat_hi[i], 1.0)
+        gam = P[:, i] / np.maximum(noise[:, i] * over_sub, 1e-11)
+        xi = 0.95 * gp * gp * gam_prev + 0.05 * np.maximum(gam - 1, 0)
         g = np.maximum(xi / (xi + beta), floor)
+        # Suppress 'sshhh' hiss in high band when flat/noise-like
+        hiss_atten = np.clip(1.0 - 0.78 * flat_hi[i], 0.10, 1.0)
+        g = np.where(hi_bins, g * hiss_atten, g)
+        g = np.where(ultra_bins, g * 0.15, g)
         g = np.convolve(np.pad(g, 1, mode="edge"), [0.25, 0.5, 0.25], "valid")
         G[:, i] = g
         gp, gam_prev = g, gam

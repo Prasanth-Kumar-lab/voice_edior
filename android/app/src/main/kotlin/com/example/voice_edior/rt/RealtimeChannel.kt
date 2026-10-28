@@ -129,7 +129,8 @@ class RealtimeChannel(private val ctx: Context) : MethodChannel.MethodCallHandle
                         val tone = call.argument<String>("tone") ?: "natural"
                         val space = call.argument<String>("space") ?: "dry"
                         val level = call.argument<String>("level") ?: "enhanced"
-                        val r = Enhancer.run(inPath, out, mode, tone, space, level) { stage, p ->
+                        val strength = (call.argument<Double>("strength") ?: 1.0).toFloat()
+                        val r = Enhancer.run(inPath, out, mode, tone, space, level, strength) { stage, p ->
                             main.post { sink?.success(mapOf("type" to "enhance", "stage" to stage, "progress" to p)) }
                         }
                         main.post {
@@ -138,6 +139,7 @@ class RealtimeChannel(private val ctx: Context) : MethodChannel.MethodCallHandle
                                 "lufsIn" to r.lufsIn, "lufsOut" to r.lufsOut,
                                 "floorInDb" to r.floorInDb, "floorOutDb" to r.floorOutDb,
                                 "f0" to r.f0, "voiceType" to r.voiceType,
+                                "stereo" to r.stereo,
                             ))
                         }
                     } catch (t: Throwable) { main.post { result.error("enhance_failed", t.message, null) } }

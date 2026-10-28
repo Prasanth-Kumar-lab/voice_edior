@@ -51,68 +51,104 @@ def space_cfg(space: str) -> Dict[str, object]:
 # ───────────────────────────── Podcast ─────────────────────────────
 
 PODCAST_TONES: Dict[str, Dict[str, object]] = {
-    # General + Bass: all-round clean podcast voice with rich speaking-driven bass & balanced clarity
+    # Every Podcast filter is a complete, self-contained chain (EQ + dynamics + colour + de-ess), so there is no
+    # separate Enhance level to pick. ONLY Theatrical adds bass; every other filter is strictly bass-free:
+    # nothing below 250 Hz is ever boosted, and the low cut follows the speaker's own pitch for a clean voice.
+    #
+    #   chain keys: exciter (generated air), parallel (density), presence (extra 2-6 kHz dB), ratio (compressor),
+    #               prox (close-mic low-mid body, Theatrical only), deess_hz / deess (sibilance control),
+    #               hpf_f0 (low cut = hpf_f0 x the speaker's lowest pitch).
+
+    # Studio Clarity: neutral, pristine broadcast microphone — honest, articulate, nothing hyped
     "general_bass": {
-        "label": "General + Bass",
-        "blurb": "Clean studio voice with warm, speaking-driven bass",
-        "curve": [(50, 2.0), (95, 5.5), (150, 4.5), (300, -3.5), (700, 0.0), (2800, 3.0), (5000, 2.5), (10000, 2.0), (15000, 1.5)],
-        "bass": 0.55,
-        "treble": 0.25,
-        "warmth": 0.12,
+        "label": "Studio Clarity",
+        "blurb": "Neutral broadcast-mic clarity · zero bass, zero mud · every word articulate",
+        "curve": [(50, -8.0), (110, -3.0), (300, -3.0), (800, 0.5), (2500, 2.5), (3500, 3.0), (6000, 0.5), (10000, -1.5), (15000, -4.0)],
+        "treble": 0.12,
+        "warmth": 0.05,
+        "chain": {"exciter": 0.08, "parallel": 0.12, "presence": 1.2, "ratio": 2.6, "prox": 0.0,
+                  "deess_hz": 6200.0, "deess": 0.85, "hpf_f0": 0.70},
     },
-    # Theatrical: movie-trailer bass + sub-octave + stereo cinema-hall depth
+    # Theatrical + Bass: movie-trailer bass + sub-octave + stereo cinema-hall depth (the only bass filter)
     "theatrical": {
-        "label": "Theatrical",
+        "label": "Theatrical + Bass",
         "blurb": "Movie-trailer bass that follows your voice, cinema-hall depth",
-        "curve": [(40, 2.5), (80, 6.0), (140, 5.0), (300, -4.5), (600, -1.5), (1500, 0.0), (3000, 3.5), (5000, 2.0), (9000, -1.5), (14000, -3.0)],
+        "curve": [(40, 2.5), (80, 6.0), (140, 5.0), (300, -4.5), (600, -1.5), (1500, 0.5), (3000, 3.0), (5000, 1.0), (9000, -3.0), (14000, -6.0)],
         "bass": 0.85,
-        "treble": 0.20,
+        "treble": 0.08,
         "warmth": 0.18,
         "theatre": True,
         "space": "theatre",
+        "chain": {"exciter": 0.08, "parallel": 0.15, "presence": 1.2, "ratio": 2.4, "prox": 1.2,
+                  "deess_hz": 6200.0, "deess": 0.85, "hpf_f0": 0.0},
     },
-    # Bass + Treble: modern Hi-Fi V-shape — deep dynamic sub-bass + sparkling HD treble air
+    # Crisp Air & Detail: modern HD creator sound — open, articulate top, silky (never harsh) consonants
     "bass_treble": {
-        "label": "Bass + Treble",
-        "blurb": "Punchy dynamic bass paired with crisp high-definition treble",
-        "curve": [(45, 3.5), (90, 7.0), (150, 5.0), (340, -6.5), (650, -3.0), (1600, 0.5), (3500, 5.5), (6500, 6.5), (11000, 7.5), (16000, 6.5)],
-        "bass": 0.70,
-        "treble": 0.85,
-        "warmth": 0.15,
-    },
-    # Ultra Bass: maximum sub-harmonic chest thunder and dark velvety top-end
-    "ultra_bass": {
-        "label": "Ultra Bass",
-        "blurb": "Deepest sub-octave chest resonance, dark and heavy",
-        "curve": [(40, 5.0), (75, 9.5), (125, 8.0), (210, 4.5), (420, -5.0), (1000, -1.0), (2800, 1.5), (5500, -4.5), (9500, -8.0), (14000, -10.0)],
-        "bass": 1.15,
-        "treble": 0.0,
-        "warmth": 0.28,
-    },
-    # Crystal Treble: razor-sharp articulation, tight low end, shimmering condenser air
-    "crystal_treble": {
-        "label": "Crystal Treble",
-        "blurb": "Ultra-crisp treble, articulation and studio condenser air",
-        "curve": [(70, -6.0), (140, -4.0), (280, -5.5), (500, -3.0), (1200, 1.5), (2800, 6.5), (4800, 8.0), (8000, 7.5), (12500, 9.0), (16500, 8.0)],
-        "bass": 0.0,
-        "treble": 1.0,
+        "label": "Crisp Air & Detail",
+        "blurb": "Modern HD creator sound · open sparkling air · silky consonants",
+        "curve": [(50, -9.0), (140, -3.5), (350, -3.0), (900, 0.0), (2200, 2.0), (4000, 3.2), (7500, 2.0), (11000, 1.5), (16000, -3.0)],
+        "treble": 0.25,
         "warmth": 0.0,
+        "chain": {"exciter": 0.14, "parallel": 0.10, "presence": 1.0, "ratio": 2.4, "prox": 0.0,
+                  "deess_hz": 6500.0, "deess": 0.90, "hpf_f0": 0.75},
     },
-    # Studio Booth: wide stereo broadcast booth, warm analog tube body + bass & treble
+    # Warm Intimate: late-night radio — analog tube colour in the low-mids, smooth rounded top, dense and close
+    "ultra_bass": {
+        "label": "Warm Intimate",
+        "blurb": "Late-night radio · analog tube colour · smooth, close and velvety",
+        "curve": [(50, -7.0), (140, -1.5), (250, 0.0), (500, 1.2), (900, 0.8), (2200, 1.0), (4500, -1.0), (8000, -3.5), (13000, -6.0)],
+        "treble": 0.0,
+        "warmth": 0.35,
+        "chain": {"exciter": 0.0, "parallel": 0.22, "presence": 0.6, "ratio": 3.0, "prox": 0.0,
+                  "deess_hz": 5800.0, "deess": 0.88, "hpf_f0": 0.65},
+    },
+    # Crystal Presence: maximum intelligibility — forward, projected, cuts through any playback device
+    "crystal_treble": {
+        "label": "Crystal Presence",
+        "blurb": "Maximum intelligibility · forward projection · cuts through phone speakers",
+        "curve": [(70, -9.0), (150, -4.5), (300, -4.5), (600, -1.5), (1400, 2.0), (2800, 4.5), (4200, 4.0), (7000, 1.5), (11000, 1.0), (16000, -3.5)],
+        "treble": 0.28,
+        "warmth": 0.0,
+        "chain": {"exciter": 0.15, "parallel": 0.20, "presence": 1.8, "ratio": 3.2, "prox": 0.0,
+                  "deess_hz": 6400.0, "deess": 0.92, "hpf_f0": 0.85},
+    },
+    # Studio Booth: acoustically treated booth — balanced voice with short, wide early reflections (stereo)
     "studio_booth": {
         "label": "Studio Booth",
-        "blurb": "Wide stereo acoustic booth with warm bass and silky treble",
-        "curve": [(55, 2.5), (110, 5.5), (180, 4.0), (350, -4.0), (1000, 1.0), (3200, 4.5), (5800, 4.0), (10500, 5.0), (15000, 4.0)],
-        "bass": 0.50,
-        "treble": 0.55,
-        "warmth": 0.25,
+        "blurb": "Treated vocal booth · balanced voice · short wide stereo reflections",
+        "curve": [(50, -7.0), (130, -2.0), (320, -2.5), (1000, 1.0), (3000, 2.5), (5500, 1.0), (9500, -1.0), (15000, -4.5)],
+        "treble": 0.12,
+        "warmth": 0.12,
         "space": "booth",
+        "chain": {"exciter": 0.08, "parallel": 0.15, "presence": 1.0, "ratio": 2.5, "prox": 0.0,
+                  "deess_hz": 6200.0, "deess": 0.85, "hpf_f0": 0.70},
     },
 }
 
 
 def podcast_tone_cfg(tone: str) -> Dict[str, object]:
     return PODCAST_TONES.get(tone, PODCAST_TONES["general_bass"])
+
+
+def podcast_chain_cfg(tone: str, level: str = "enhanced") -> Dict[str, float]:
+    """Full dynamics/colour chain for a Podcast filter.
+    Each filter has its own tuned defaults. When level is natural or max,
+    dynamics and exciter air adapt accordingly.
+    """
+    base = {k: float(v) for k, v in LEVELS.get(level, LEVELS["enhanced"]).items() if isinstance(v, (int, float))}
+    base.update({"deess_hz": 6500.0, "deess": 0.75, "hpf_f0": 0.0})
+    base.update({k: float(v) for k, v in dict(podcast_tone_cfg(tone).get("chain", {})).items()})  # type: ignore[arg-type]
+    if level == "natural":
+        base["exciter"] = 0.0
+        base["parallel"] = 0.0
+        base["presence"] = max(0.0, base.get("presence", 0.0) - 1.0)
+    elif level == "max":
+        base["exciter"] = min(1.0, base.get("exciter", 0.3) * 1.5 + 0.15)
+        base["parallel"] = min(0.4, base.get("parallel", 0.15) * 1.5 + 0.05)
+        base["presence"] = base.get("presence", 1.5) + 1.0
+    if not podcast_tone_cfg(tone).get("theatre"):
+        base["prox"] = 0.0                                   # bass-free guarantee for every non-Theatrical filter
+    return base
 
 # Enhance level: how far the voice is taken beyond "cleaned".
 #   exciter  – generated high-frequency detail (air / clarity a phone mic loses)

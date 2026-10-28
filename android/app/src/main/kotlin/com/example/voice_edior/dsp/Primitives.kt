@@ -186,7 +186,7 @@ class SpectralDenoiser(private val sr: Int) {
     private val ps = DoubleArray(BINS)
     private val cur = DoubleArray(BINS)
     private val mMin = DoubleArray(BINS)
-    private val med = DoubleArray(9)
+    private val med = DoubleArray(15)
     private var warm = 0
     private val subs = Array(SUBS) { DoubleArray(BINS) { Double.MAX_VALUE } }
     private var subIdx = 0
@@ -234,12 +234,14 @@ class SpectralDenoiser(private val sr: Int) {
     /** Learns the noise floor from the spectrum in [re]/[im] and attenuates it in place. */
     private fun filter(a: Double) {
         val strength = min(1.0, a * 8.0)              // smooth hand-off to exact bypass at 0
-        val beta = 1.0 + 1.5 * a
-        val floorGain = dbToLin(-(6.0 + 24.0 * a))
+        val beta = 2.2 + 2.8 * a
+        val floorGain = dbToLin(-(14.0 + 36.0 * a))
+        val hiCutBin = (4200.0 * N / sr).toInt().coerceIn(1, BINS - 1)
+        val ultraCutBin = (11500.0 * N / sr).toInt().coerceIn(1, BINS - 1)
 
         for (k in 0 until BINS) {
             val p = re[k] * re[k] + im[k] * im[k] + 1e-8
-            if (!primed) { ps[k] = p; cur[k] = p } else ps[k] = 0.7 * ps[k] + 0.3 * p
+            if (!primed) { ps[k] = p; cur[k] = p } else ps[k] = 0.65 * ps[k] + 0.35 * p
             if (ps[k] < cur[k]) cur[k] = ps[k]
         }
         primed = true
@@ -255,17 +257,25 @@ class SpectralDenoiser(private val sr: Int) {
             mMin[k] = m
         }
         // Noise is smooth across frequency, held notes are peaky: cap each bin at the local median
-        // so a sustained note cannot be learned as "noise".
+        // over 15 distinct neighboring bins so a multi-harmonic sustained note is never learned as "noise".
         for (k in 0 until BINS) {
-            for (j in 0 until 9) med[j] = mMin[(k - 4 + j).coerceIn(0, BINS - 1)]
-            for (x in 1 until 9) { val v = med[x]; var b = x - 1; while (b >= 0 && med[b] > v) { med[b + 1] = med[b]; b-- }; med[b + 1] = v }
-            noise[k] = BIAS * min(mMin[k], med[4])
+            val startBin = (k - 7).coerceIn(0, BINS - 15)
+            for (j in 0 until 15) med[j] = mMin[startBin + j]
+            for (x in 1 until 15) { val v = med[x]; var b = x - 1; while (b >= 0 && med[b] > v) { med[b + 1] = med[b]; b-- }; med[b + 1] = v }
+            val freqBoost = if (k >= hiCutBin) 1.5 else 1.0
+            noise[k] = BIAS * 1.25 * freqBoost * min(mMin[k], med[7])
         }
         for (k in 0 until BINS) {
             val p = re[k] * re[k] + im[k] * im[k] + 1e-8
             val gam = p / noise[k]
             val xi = ALPHA * gPrev[k] * gPrev[k] * gamPrev[k] + (1 - ALPHA) * max(gam - 1.0, 0.0)
-            gain[k] = max(xi / (xi + beta), floorGain)
+            val localBeta = if (k >= hiCutBin) beta * 1.6 else beta
+            var g = max(xi / (xi + localBeta), floorGain)
+            if (k >= ultraCutBin) {
+                val roll = ((BINS - 1 - k).toDouble() / max(1, BINS - 1 - ultraCutBin)).coerceIn(0.0, 1.0)
+                g *= roll * roll
+            }
+            gain[k] = g
             gamPrev[k] = gam
         }
         for (k in 0 until BINS) {
@@ -283,5 +293,283 @@ class SpectralDenoiser(private val sr: Int) {
                 im[N - k] = -im[k]
             }
         }
+    }
+}
+
+/**
+ * Offline Two-Pass Harmonic + Multi-Band Spectral Vocal Isolator.
+ *
+ * Strips out stationary noise, non-stationary street/café chatter, background music accompaniment,
+ * and high-frequency 'sshhh' vocal hiss while preserving crystal-clear human voice in both
+ * Podcast and Vocals/Sing modes.
+ */
+object VocalIsolator {
+    private const val N = 1024
+    private const val HOP = 256
+    private const val BINS = N / 2 + 1
+
+    fun isolate(xIn: FloatArray, sr: Int, f0Hint: Float = 150f, vocalsMode: Boolean = false): FloatArray {
+        if (xIn.size < N * 2) return xIn.copyOf()
+
+        // 1. Remove sharp pin/click transients (5-point median spike suppressor)
+        val x = FloatArray(xIn.size)
+        val m5 = FloatArray(5)
+        var diffAbsSum = 0.0
+        for (i in xIn.indices) {
+            for (d in -2..2) m5[d + 2] = xIn[(i + d).coerceIn(0, xIn.size - 1)]
+            m5.sort()
+            val med = m5[2]
+            x[i] = med
+            diffAbsSum += kotlin.math.abs(xIn[i] - med)
+        }
+        val mad = (diffAbsSum / xIn.size) * 1.4826 + 1e-7
+        for (i in xIn.indices) {
+            val med = x[i]
+            x[i] = if (kotlin.math.abs(xIn[i] - med) > 4.0 * mad) med else xIn[i]
+        }
+
+        // 2. STFT analysis (N = 1024, HOP = 256, sqrt-Hann window)
+        val nFrames = (x.size - N) / HOP + 1
+        if (nFrames < 4) return x
+        val fft = Fft(N)
+        val win = DoubleArray(N) { sqrt(0.5 - 0.5 * cos(2 * PI * it / N)) }
+        val specRe = Array(nFrames) { DoubleArray(BINS) }
+        val specIm = Array(nFrames) { DoubleArray(BINS) }
+        val power = Array(nFrames) { DoubleArray(BINS) }
+
+        val re = DoubleArray(N)
+        val im = DoubleArray(N)
+        val binHz = sr.toDouble() / N
+        val vLoBin = (120.0 / binHz).toInt().coerceIn(1, BINS - 1)
+        val vHiBin = (3600.0 / binHz).toInt().coerceIn(vLoBin + 1, BINS - 1)
+        val sibLoBin = (3800.0 / binHz).toInt().coerceIn(1, BINS - 1)
+        val sibHiBin = (11000.0 / binHz).toInt().coerceIn(sibLoBin + 1, BINS - 1)
+        val maxVocalBin = ((if (vocalsMode) 13000.0 else 11500.0) / binHz).toInt().coerceIn(sibLoBin + 1, BINS - 1)
+
+        val vocalBandDb = DoubleArray(nFrames)
+        val harmonicity = DoubleArray(nFrames)
+        val instF0Bin = DoubleArray(nFrames)
+        val highFlatness = DoubleArray(nFrames)
+
+        for (t in 0 until nFrames) {
+            val off = t * HOP
+            for (i in 0 until N) {
+                re[i] = x[off + i] * win[i]
+                im[i] = 0.0
+            }
+            fft.transform(re, im)
+            var vEnergy = 1e-12
+            var vMax = 1e-12
+            for (k in 0 until BINS) {
+                specRe[t][k] = re[k]
+                specIm[t][k] = im[k]
+                val p = re[k] * re[k] + im[k] * im[k] + 1e-12
+                power[t][k] = p
+                if (k in vLoBin..vHiBin) {
+                    vEnergy += p
+                    if (p > vMax) vMax = p
+                }
+            }
+            vocalBandDb[t] = 10.0 * kotlin.math.log10(vEnergy / (vHiBin - vLoBin + 1))
+
+            // High-band spectral flatness (detects 'sshhh' white-noise hiss vs crisp consonants)
+            var logSum = 0.0
+            var arithSum = 1e-12
+            val nHi = (sibHiBin - sibLoBin + 1).toDouble()
+            for (k in sibLoBin..sibHiBin) {
+                val p = power[t][k]
+                logSum += kotlin.math.ln(p)
+                arithSum += p
+            }
+            val geomMean = kotlin.math.exp(logSum / nHi)
+            val arithMean = arithSum / nHi
+            highFlatness[t] = (geomMean / arithMean).coerceIn(0.0, 1.0)
+
+            // Instantaneous harmonic pitch detection via Harmonic Product / Comb Correlation
+            val minF0Bin = (75.0 / binHz).coerceAtLeast(1.5)
+            val maxF0Bin = (460.0 / binHz).coerceAtMost(60.0)
+            var bestScore = 0.0
+            var bestF0 = (if (f0Hint > 65f) f0Hint.toDouble() else 150.0) / binHz
+            var step = minF0Bin
+            while (step <= maxF0Bin) {
+                var hSum = 0.0
+                var vSum = 0.0
+                for (h in 1..6) {
+                    val hk = (h * step).toInt()
+                    val vk = ((h + 0.5) * step).toInt()
+                    if (hk < vHiBin) hSum += sqrt(power[t][hk])
+                    if (vk < vHiBin) vSum += sqrt(power[t][vk])
+                }
+                val score = hSum / (vSum + 1e-6)
+                if (score > bestScore) {
+                    bestScore = score
+                    bestF0 = step
+                }
+                step += 0.35
+            }
+            instF0Bin[t] = bestF0
+            harmonicity[t] = ((bestScore - 1.15) / 1.5).coerceIn(0.0, 1.0)
+        }
+
+        // 3. Identify vocal vs non-vocal (background noise / music-only) frames
+        val sortedV = vocalBandDb.copyOf().also { it.sort() }
+        val p15 = sortedV[(nFrames * 0.15).toInt()]
+        val p85 = sortedV[(nFrames * 0.85).toInt()]
+        val dynRange = max(8.0, p85 - p15)
+        val speechThrDb = max(p15 + 4.5, p85 - min(22.0, dynRange * 0.68))
+
+        val isVocalFrame = BooleanArray(nFrames) { t ->
+            vocalBandDb[t] > speechThrDb && (harmonicity[t] > 0.18 || vocalBandDb[t] > speechThrDb + 5.0)
+        }
+
+        // 4. Learn global + local sliding noise/music power floor per bin
+        val globalFloor = DoubleArray(BINS)
+        val binScratch = DoubleArray(nFrames)
+        for (k in 0 until BINS) {
+            var countNonVocal = 0
+            for (t in 0 until nFrames) {
+                if (!isVocalFrame[t]) {
+                    binScratch[countNonVocal++] = power[t][k]
+                }
+            }
+            if (countNonVocal >= 4) {
+                java.util.Arrays.sort(binScratch, 0, countNonVocal)
+                globalFloor[k] = binScratch[(countNonVocal * 0.60).toInt().coerceIn(0, countNonVocal - 1)]
+            } else {
+                for (t in 0 until nFrames) binScratch[t] = power[t][k]
+                binScratch.sort()
+                globalFloor[k] = binScratch[(nFrames * 0.22).toInt().coerceIn(0, nFrames - 1)]
+            }
+        }
+
+        // Smooth global vocal activity envelope with look-ahead (15 ms) and hold (95 ms)
+        val holdFrames = max(2, (0.095 * sr / HOP).toInt())
+        val lookFrames = max(1, (0.015 * sr / HOP).toInt())
+        val rawGate = DoubleArray(nFrames)
+        var hold = 0
+        for (t in 0 until nFrames) {
+            if (isVocalFrame[t]) hold = holdFrames
+            rawGate[t] = if (hold > 0) 1.0 else 0.0
+            if (hold > 0) hold--
+        }
+        val frameGate = DoubleArray(nFrames)
+        var gCur = 0.0
+        for (t in 0 until nFrames) {
+            val target = rawGate[min(nFrames - 1, t + lookFrames)]
+            val coef = if (target > gCur) 0.35 else 0.84
+            gCur = coef * gCur + (1.0 - coef) * target
+            frameGate[t] = gCur
+        }
+
+        // 5. Two-pass Wiener + Harmonic Comb + High-Band Anti-'sshhh' suppression
+        val gPrev = DoubleArray(BINS) { 1.0 }
+        val gamPrev = DoubleArray(BINS) { 1.0 }
+        val gain = DoubleArray(BINS)
+        val smoothG = DoubleArray(BINS)
+        val pauseFloorLin = dbToLin(-65.0)
+        val activeFloorLin = dbToLin(if (vocalsMode) -40.0 else -46.0)
+        val out = FloatArray(x.size)
+
+        val winRadius = max(6, (0.45 * sr / HOP).toInt())
+        val localMin = DoubleArray(BINS)
+
+        for (t in 0 until nFrames) {
+            val t0 = max(0, t - winRadius)
+            val t1 = min(nFrames - 1, t + winRadius)
+            for (k in 0 until BINS) {
+                var m = Double.MAX_VALUE
+                var stepT = t0
+                while (stepT <= t1) {
+                    if (power[stepT][k] < m) m = power[stepT][k]
+                    stepT += 2
+                }
+                localMin[k] = max(globalFloor[k], m * 2.8)
+            }
+
+            val f0b = instF0Bin[t]
+            val harmStr = harmonicity[t]
+            val flatHi = highFlatness[t]
+            val vGate = frameGate[t]
+
+            for (k in 0 until BINS) {
+                val p = power[t][k]
+                // Over-subtraction: stronger in sub (<100 Hz) and high hiss (>3.8 kHz) bands
+                val overSub = when {
+                    k < vLoBin -> 4.5
+                    k >= sibLoBin -> 4.2 + 4.0 * flatHi
+                    else -> if (vocalsMode) 2.6 else 3.2
+                }
+                val nEst = localMin[k] * overSub + 1e-12
+                val gam = p / nEst
+                val xi = 0.94 * gPrev[k] * gPrev[k] * gamPrev[k] + 0.06 * max(gam - 1.0, 0.0)
+                val beta = if (k >= sibLoBin) 3.8 else 2.2
+                var g = max(xi / (xi + beta), activeFloorLin)
+
+                // Harmonic Comb Mask: suppress background music & noise between vocal harmonics (85 Hz - 3800 Hz)
+                if (k in vLoBin..vHiBin && harmStr > 0.22 && f0b >= 1.5) {
+                    val nearestHarm = kotlin.math.round(k / f0b) * f0b
+                    val dist = kotlin.math.abs(k - nearestHarm) / f0b // 0.0 on harmonic, 0.5 mid-valley
+                    if (dist > 0.22) {
+                        val valleyAtten = 1.0 - (0.65 * harmStr * ((dist - 0.22) / 0.28).coerceIn(0.0, 1.0))
+                        g *= valleyAtten
+                    }
+                }
+
+                // Anti-'sshhh' High-Frequency Gate:
+                // During vowels or when high band is flat white-noise hiss, suppress >3.8 kHz
+                if (k >= sibLoBin) {
+                    val hissPenalty = (1.0 - 0.82 * flatHi).coerceIn(0.08, 1.0)
+                    // Also require high-band energy to be a genuine consonant peak, not continuous hiss
+                    val snrHi = gam / (1.0 + gam)
+                    g *= hissPenalty * snrHi
+                }
+
+                // Smooth ultrasonic / high-hiss low-pass roll-off above 11.5 kHz (Podcast) / 13 kHz (Vocals)
+                if (k >= maxVocalBin) {
+                    val roll = ((BINS - 1 - k).toDouble() / max(1, BINS - 1 - maxVocalBin)).coerceIn(0.0, 1.0)
+                    g *= roll * roll * 0.15
+                }
+
+                // Apply pause gate so non-vocal gaps drop to -65 dB studio black
+                val finalG = pauseFloorLin + (g - pauseFloorLin) * vGate
+                gain[k] = finalG.coerceIn(pauseFloorLin, 1.0)
+                gamPrev[k] = gam
+            }
+
+            // Smooth across adjacent bins to prevent musical noise artifacts
+            for (k in 0 until BINS) {
+                val lo = gain[max(0, k - 1)]
+                val hi = gain[min(BINS - 1, k + 1)]
+                smoothG[k] = 0.25 * lo + 0.50 * gain[k] + 0.25 * hi
+                gPrev[k] = smoothG[k]
+            }
+
+            for (k in 0 until BINS) {
+                val g = smoothG[k]
+                re[k] = specRe[t][k] * g
+                im[k] = specIm[t][k] * g
+                if (k in 1 until N / 2) {
+                    re[N - k] = re[k]
+                    im[N - k] = -im[k]
+                }
+            }
+            fft.inverse(re, im)
+            val off = t * HOP
+            val scale = 0.5 // sqrt-Hann at 75% overlap (N=1024, HOP=256) sums to 2.0
+            for (i in 0 until N) {
+                out[off + i] += (re[i] * win[i] * scale).toFloat()
+            }
+        }
+
+        // 6. Final clean Butterworth high-pass (80 Hz) & anti-hiss low-pass (11.8 kHz / 13.2 kHz)
+        val hp1 = Biquad().also { it.highpass(sr, if (vocalsMode) 75.0 else 82.0) }
+        val hp2 = Biquad().also { it.highpass(sr, if (vocalsMode) 75.0 else 82.0) }
+        val lp1 = Biquad().also { it.lowpass(sr, if (vocalsMode) 13200.0 else 11800.0) }
+        val lp2 = Biquad().also { it.lowpass(sr, if (vocalsMode) 13200.0 else 11800.0) }
+        for (i in out.indices) {
+            val v = lp2.process(lp1.process(hp2.process(hp1.process(out[i].toDouble()))))
+            out[i] = v.toFloat()
+        }
+        return out
     }
 }

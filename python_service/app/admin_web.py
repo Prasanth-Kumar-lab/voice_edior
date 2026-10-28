@@ -1,6 +1,6 @@
-"""Standalone Web Admin Dashboard served at http://127.0.0.1:8088/admin.
+"""Standalone Web Admin Dashboard served at /admin.
 
-Connects directly to the `vocalpolish_studio` MongoDB database via the FastAPI `/api/*` endpoints.
+Connects to the `vocalpolish_studio` MongoDB database via JWT-protected FastAPI `/api/admin/*` endpoints.
 """
 
 ADMIN_HTML = r"""<!DOCTYPE html>
@@ -56,7 +56,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
             <span class="vp-text-gradient">VocalPolish Studio</span>
             <span class="text-xs px-2.5 py-0.5 rounded-full bg-[#1C2233] border border-[#2A3148] text-[#22D3EE] font-bold">WEB ADMIN</span>
           </h1>
-          <p class="text-xs text-[#9AA3B8]">MongoDB Compass DB: <code id="dbNameBadge" class="text-[#22D3EE] font-mono">vocalpolish_studio</code> · Real-Time Sync with Android App</p>
+          <p class="text-xs text-[#9AA3B8]">MongoDB Compass DB: <code id="dbNameBadge" class="text-[#22D3EE] font-mono">vocalpolish_studio</code> · JWT Secured</p>
         </div>
       </div>
 
@@ -71,10 +71,11 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 
       <div class="flex items-center gap-3">
         <span id="syncIndicator" class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-full bg-[#141824] border border-[#2A3148]">
-          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span>MongoDB Connected</span>
+          <span id="syncDot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span id="syncLabel">MongoDB Connected</span>
         </span>
         <button onclick="fetchState()" class="px-3.5 py-1.5 rounded-xl bg-[#1C2233] hover:bg-[#2A3148] text-xs font-bold transition">↻ Refresh</button>
+        <button onclick="adminLogout()" class="px-3 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold hover:bg-rose-500/25 transition">Sign Out</button>
       </div>
     </div>
   </header>
@@ -84,7 +85,6 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 
     <!-- 1. OVERVIEW & REVENUE TAB -->
     <section id="tab-overview" class="space-y-6">
-      <!-- Hero Revenue Card -->
       <div class="rounded-2xl p-7 vp-gradient vp-glow flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div>
           <div class="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-white/90">
@@ -211,7 +211,6 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         <button onclick="openModal('modalAddFeature')" class="px-4 py-2.5 rounded-xl vp-gradient text-white text-sm font-bold vp-glow">+ Add New Filter / Functionality</button>
       </div>
 
-      <!-- Global App Banner & Switches -->
       <div class="vp-card p-6 space-y-4">
         <div class="flex flex-wrap items-center justify-between gap-4">
           <div class="flex-1 min-w-[280px]">
@@ -258,6 +257,29 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     </section>
 
   </main>
+
+  <!-- MODAL: ADMIN SIGN IN -->
+  <div id="modalAdminLogin" class="fixed inset-0 z-50 hidden bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+    <div class="vp-card max-w-md w-full p-6 space-y-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl vp-gradient flex items-center justify-center font-black text-white">VP</div>
+        <div>
+          <h3 class="text-lg font-extrabold">Administrator Authentication</h3>
+          <p class="text-xs text-[#9AA3B8]">Sign in with your administrator studio account to manage MongoDB collections.</p>
+        </div>
+      </div>
+      <div id="adminLoginError" class="hidden text-xs p-3 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-300"></div>
+      <div>
+        <label class="text-xs font-bold text-[#9AA3B8]">Admin Email</label>
+        <input id="adminLoginEmail" type="email" value="alex@podcaststudio.io" placeholder="alex@podcaststudio.io" class="w-full mt-1 px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
+      </div>
+      <div>
+        <label class="text-xs font-bold text-[#9AA3B8]">Password</label>
+        <input id="adminLoginPassword" type="password" placeholder="Enter administrator password" class="w-full mt-1 px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
+      </div>
+      <button onclick="submitAdminLogin()" class="w-full py-2.5 rounded-xl vp-gradient text-white text-sm font-extrabold vp-glow">Sign In to Command Center</button>
+    </div>
+  </div>
 
   <!-- MODAL: USER PROFILE INSPECTOR -->
   <div id="modalUserProfile" class="fixed inset-0 z-50 hidden bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
@@ -319,7 +341,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       </div>
       <input id="newUserName" type="text" placeholder="Full Creator Name" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
       <input id="newUserEmail" type="email" placeholder="Email Address" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
-      <input id="newUserPassword" type="password" value="studio123" placeholder="Initial Password" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
+      <input id="newUserPassword" type="password" placeholder="Initial Password (min 6 chars)" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
       <select id="newUserRole" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm">
         <option value="Podcaster">Podcaster</option>
         <option value="Vocalist">Vocalist</option>
@@ -411,13 +433,16 @@ ADMIN_HTML = r"""<!DOCTYPE html>
   <div id="modalRecordPayment" class="fixed inset-0 z-50 hidden bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
     <div class="vp-card max-w-md w-full p-6 space-y-4">
       <div class="flex justify-between items-center">
-        <h3 class="text-lg font-extrabold">Record Subscription Payment</h3>
+        <h3 class="text-lg font-extrabold">Record Verified Subscription Payment</h3>
         <button onclick="closeModal('modalRecordPayment')" class="text-[#9AA3B8] hover:text-white">✕</button>
       </div>
       <input id="txUserName" type="text" placeholder="Customer Name" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
       <input id="txUserEmail" type="email" placeholder="Customer Email" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
-      <input id="txPlanName" type="text" value="Studio AI Pro" placeholder="Plan Name" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
-      <input id="txAmount" type="number" step="0.01" value="95.88" placeholder="Amount USD" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
+      <input id="txPlanName" type="text" value="Studio AI Pro" placeholder="Plan Name (Price resolved on server)" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm" />
+      <select id="txBillingCycle" class="w-full px-3.5 py-2.5 rounded-xl vp-surface-alt text-sm">
+        <option value="Yearly">Yearly Billing</option>
+        <option value="Monthly">Monthly Billing</option>
+      </select>
       <div class="flex justify-end gap-2 pt-2">
         <button onclick="closeModal('modalRecordPayment')" class="px-4 py-2 rounded-xl vp-surface-alt text-xs font-bold">Cancel</button>
         <button onclick="submitRecordPayment()" class="px-4 py-2 rounded-xl vp-gradient text-white text-xs font-bold">Save Transaction</button>
@@ -427,6 +452,65 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 
   <script>
     let STATE = { users: [], plans: [], features: [], transactions: [], settings: {}, metrics: {} };
+
+    function getAdminToken() {
+      return sessionStorage.getItem('vp_admin_jwt') || '';
+    }
+
+    function setAdminToken(token) {
+      if (token) {
+        sessionStorage.setItem('vp_admin_jwt', token);
+      } else {
+        sessionStorage.removeItem('vp_admin_jwt');
+      }
+    }
+
+    async function apiFetch(url, options = {}) {
+      const headers = Object.assign({}, options.headers || {});
+      const token = getAdminToken();
+      if (token) {
+        headers['Authorization'] = 'Bearer ' + token;
+      }
+      const res = await fetch(url, Object.assign({}, options, { headers }));
+      if (res.status === 401 || res.status === 403) {
+        document.getElementById('modalAdminLogin').classList.remove('hidden');
+        document.getElementById('syncLabel').textContent = 'Auth Required';
+        throw new Error('Unauthorized');
+      }
+      return res;
+    }
+
+    async function submitAdminLogin() {
+      const email = document.getElementById('adminLoginEmail').value.trim();
+      const password = document.getElementById('adminLoginPassword').value;
+      const errBox = document.getElementById('adminLoginError');
+      errBox.classList.add('hidden');
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password, device_model: 'Web Admin Console' })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.access_token) {
+          errBox.textContent = data.detail || 'Authentication failed';
+          errBox.classList.remove('hidden');
+          return;
+        }
+        setAdminToken(data.access_token);
+        document.getElementById('modalAdminLogin').classList.add('hidden');
+        document.getElementById('syncLabel').textContent = 'MongoDB Connected';
+        await fetchState();
+      } catch (e) {
+        errBox.textContent = 'Network error connecting to server';
+        errBox.classList.remove('hidden');
+      }
+    }
+
+    function adminLogout() {
+      setAdminToken('');
+      document.getElementById('modalAdminLogin').classList.remove('hidden');
+    }
 
     function fmtMoney(n) {
       return Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -457,9 +541,11 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     }
 
     async function fetchState() {
-      const res = await fetch('/api/admin/state');
-      STATE = await res.json();
-      renderAll();
+      try {
+        const res = await apiFetch('/api/admin/state');
+        STATE = await res.json();
+        renderAll();
+      } catch (_) {}
     }
 
     function renderAll() {
@@ -475,7 +561,6 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       document.getElementById('kpiMastersCount').textContent = m.total_masters || 0;
       document.getElementById('kpiMinutesSub').textContent = `${m.total_minutes || 0} total studio minutes`;
 
-      // Revenue Bars
       const revList = (STATE.settings && STATE.settings.monthly_revenue) || [];
       const maxRev = Math.max(1, ...revList.map(r => r.revenue_k));
       document.getElementById('revenueBarsContainer').innerHTML = revList.map(r => {
@@ -487,7 +572,6 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         </div>`;
       }).join('');
 
-      // Transactions
       document.getElementById('transactionsList').innerHTML = STATE.transactions.map(t => `
         <div class="flex items-center justify-between p-3.5 rounded-xl vp-surface-alt">
           <div>
@@ -498,7 +582,6 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         </div>
       `).join('');
 
-      // Global settings inputs
       if (STATE.settings) {
         document.getElementById('bannerInput').value = STATE.settings.broadcast_announcement || '';
         document.getElementById('chkCloudGpu').checked = !!STATE.settings.cloud_gpu_acceleration;
@@ -677,14 +760,14 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       `).join('');
     }
 
-    // ── API Actions ──
+    // ── JWT-Authenticated API Actions ──
     async function toggleUserStatus(uid) {
-      await fetch(`/api/admin/users/${uid}/toggle-status`, { method: 'POST' });
+      await apiFetch(`/api/admin/users/${uid}/toggle-status`, { method: 'POST' });
       await fetchState();
     }
 
     async function changeUserPlan(uid, planName) {
-      await fetch(`/api/admin/users/${uid}/plan`, {
+      await apiFetch(`/api/admin/users/${uid}/plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan_name: planName })
@@ -695,7 +778,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 
     async function deleteUser(uid) {
       if (!confirm('Remove this user permanently from MongoDB?')) return;
-      await fetch(`/api/admin/users/${uid}`, { method: 'DELETE' });
+      await apiFetch(`/api/admin/users/${uid}`, { method: 'DELETE' });
       await fetchState();
     }
 
@@ -705,8 +788,8 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       const password = document.getElementById('newUserPassword').value;
       const role = document.getElementById('newUserRole').value;
       const plan_name = document.getElementById('newUserPlan').value;
-      if (!name || !email) return alert('Name and email are required');
-      await fetch('/api/admin/users', {
+      if (!name || !email || password.length < 6) return alert('Name, email, and password (min 6 chars) are required');
+      await apiFetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, password, role, plan_name })
@@ -724,7 +807,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       const perks = document.getElementById('newPlanPerks').value.split(',').map(s => s.trim()).filter(Boolean);
       const popular = document.getElementById('newPlanPopular').checked;
       if (!name) return alert('Plan name required');
-      await fetch('/api/admin/plans', {
+      await apiFetch('/api/admin/plans', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, badge, monthly_price, yearly_price, description, perks, popular })
@@ -734,13 +817,13 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     }
 
     async function togglePlan(pid) {
-      await fetch(`/api/admin/plans/${pid}/toggle`, { method: 'POST' });
+      await apiFetch(`/api/admin/plans/${pid}/toggle`, { method: 'POST' });
       await fetchState();
     }
 
     async function deletePlan(pid) {
       if (!confirm('Delete this subscription tier from MongoDB?')) return;
-      await fetch(`/api/admin/plans/${pid}`, { method: 'DELETE' });
+      await apiFetch(`/api/admin/plans/${pid}`, { method: 'DELETE' });
       await fetchState();
     }
 
@@ -754,7 +837,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       const space = document.getElementById('newFeatSpace').value;
       const pro_only = document.getElementById('newFeatProOnly').checked;
       if (!title) return alert('Feature title required');
-      await fetch('/api/admin/features', {
+      await apiFetch('/api/admin/features', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title, category, description, bass, treble, warmth, space, pro_only })
@@ -764,18 +847,18 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     }
 
     async function toggleFeature(fid) {
-      await fetch(`/api/admin/features/${fid}/toggle`, { method: 'POST' });
+      await apiFetch(`/api/admin/features/${fid}/toggle`, { method: 'POST' });
       await fetchState();
     }
 
     async function toggleFeaturePro(fid) {
-      await fetch(`/api/admin/features/${fid}/toggle-pro`, { method: 'POST' });
+      await apiFetch(`/api/admin/features/${fid}/toggle-pro`, { method: 'POST' });
       await fetchState();
     }
 
     async function deleteFeature(fid) {
       if (!confirm('Delete this feature from MongoDB?')) return;
-      await fetch(`/api/admin/features/${fid}`, { method: 'DELETE' });
+      await apiFetch(`/api/admin/features/${fid}`, { method: 'DELETE' });
       await fetchState();
     }
 
@@ -783,7 +866,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       const broadcast_announcement = document.getElementById('bannerInput').value.trim();
       const cloud_gpu_acceleration = document.getElementById('chkCloudGpu').checked;
       const maintenance_mode = document.getElementById('chkMaintenance').checked;
-      await fetch('/api/admin/settings', {
+      await apiFetch('/api/admin/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ broadcast_announcement, cloud_gpu_acceleration, maintenance_mode })
@@ -795,19 +878,21 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       const user_name = document.getElementById('txUserName').value.trim();
       const user_email = document.getElementById('txUserEmail').value.trim();
       const plan_name = document.getElementById('txPlanName').value.trim();
-      const amount_usd = parseFloat(document.getElementById('txAmount').value || 0);
-      if (!user_name || !amount_usd) return;
-      await fetch('/api/admin/transactions', {
+      const billing_cycle = document.getElementById('txBillingCycle').value;
+      if (!user_name || !user_email) return;
+      await apiFetch('/api/admin/transactions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_name, user_email, plan_name, amount_usd, billing_cycle: 'Yearly', method: 'Admin Manual' })
+        body: JSON.stringify({ user_name, user_email, plan_name, billing_cycle, method: 'Admin Verified' })
       });
       closeModal('modalRecordPayment');
       await fetchState();
     }
 
     fetchState();
-    setInterval(fetchState, 6000);
+    setInterval(() => {
+      if (getAdminToken()) fetchState();
+    }, 6000);
   </script>
 </body>
 </html>

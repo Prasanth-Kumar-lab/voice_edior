@@ -18,8 +18,8 @@ class LoginView extends StatefulWidget {
 }
 
 class _LoginViewState extends State<LoginView> {
-  final TextEditingController _emailCtrl = TextEditingController(text: 'alex@podcaststudio.io');
-  final TextEditingController _passCtrl = TextEditingController(text: 'studio123');
+  final TextEditingController _emailCtrl = TextEditingController();
+  final TextEditingController _passCtrl = TextEditingController();
   bool _obscure = true;
   bool _remember = true;
   bool _loading = false;
@@ -39,10 +39,28 @@ class _LoginViewState extends State<LoginView> {
     if (!mounted) return;
     setState(() => _loading = false);
     if (err != null) {
-      Get.snackbar('Access Denied', err, snackPosition: SnackPosition.BOTTOM, backgroundColor: AppColors.danger, colorText: Colors.white);
+      Get.snackbar(
+        'Access Denied',
+        err,
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: AppColors.danger,
+        colorText: Colors.white,
+      );
       return;
     }
-    Get.offAll(() => const MainShellView(), transition: Transition.fadeIn, duration: const Duration(milliseconds: 350));
+    Get.offAll(
+      () => const MainShellView(),
+      transition: Transition.fadeIn,
+      duration: const Duration(milliseconds: 350),
+    );
+  }
+
+  void _enterGuestMode() {
+    Get.offAll(
+      () => const MainShellView(),
+      transition: Transition.fadeIn,
+      duration: const Duration(milliseconds: 350),
+    );
   }
 
   @override
@@ -73,7 +91,10 @@ class _LoginViewState extends State<LoginView> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 480),
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                    vertical: AppSpacing.md,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -88,7 +109,11 @@ class _LoginViewState extends State<LoginView> {
                               gradient: AppColors.signature,
                               boxShadow: AppShadows.glow(),
                             ),
-                            child: const Icon(Icons.graphic_eq_rounded, color: Colors.white, size: 24),
+                            child: const Icon(
+                              Icons.graphic_eq_rounded,
+                              color: Colors.white,
+                              size: 24,
+                            ),
                           ),
                           const SizedBox(width: 12),
                           Column(
@@ -96,26 +121,41 @@ class _LoginViewState extends State<LoginView> {
                             children: [
                               ShaderMask(
                                 shaderCallback: (r) => AppColors.signature.createShader(r),
-                                child: Text('VocalPolish', style: t.titleLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w800)),
+                                child: Text(
+                                  'VocalPolish',
+                                  style: t.titleLarge?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
                               ),
-                              Text('Studio AI Suite', style: t.labelSmall?.copyWith(color: AppColors.muted(b))),
+                              Text(
+                                'Studio AI Suite',
+                                style: t.labelSmall?.copyWith(color: AppColors.muted(b)),
+                              ),
                             ],
                           ),
                           const Spacer(),
                           TextButton(
-                            onPressed: _enterStudio,
-                            child: Text('Guest Mode', style: t.labelLarge?.copyWith(color: AppColors.accentBright)),
+                            onPressed: _enterGuestMode,
+                            child: Text(
+                              'Guest Mode',
+                              style: t.labelLarge?.copyWith(color: AppColors.accentBright),
+                            ),
                           ),
                         ],
                       ),
                       const SizedBox(height: AppSpacing.xl),
-                      Text('Welcome back,\nCreator', style: t.displaySmall?.copyWith(fontWeight: FontWeight.w800, height: 1.15))
-                          .animate()
-                          .fadeIn()
-                          .slideY(begin: 0.1),
+                      Text(
+                        'Welcome back,\nCreator',
+                        style: t.displaySmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          height: 1.15,
+                        ),
+                      ).animate().fadeIn().slideY(begin: 0.1),
                       const SizedBox(height: 8),
                       Text(
-                        'Sign in to access your AI podcast filters, theatrical bass presets, and studio vocal chain.',
+                        'Sign in to access your AI podcast filters, theatrical bass presets, and multi-track Mix Studio.',
                         style: t.bodyMedium?.copyWith(color: AppColors.muted(b)),
                       ),
                       const SizedBox(height: AppSpacing.lg),
@@ -147,7 +187,12 @@ class _LoginViewState extends State<LoginView> {
                                 prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
                                 suffixIcon: IconButton(
                                   onPressed: () => setState(() => _obscure = !_obscure),
-                                  icon: Icon(_obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 20),
+                                  icon: Icon(
+                                    _obscure
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
+                                    size: 20,
+                                  ),
                                 ),
                               ),
                             ),
@@ -164,7 +209,10 @@ class _LoginViewState extends State<LoginView> {
                                   ),
                                 ),
                                 const SizedBox(width: 8),
-                                Text('Keep me signed in', style: t.bodySmall?.copyWith(color: AppColors.muted(b))),
+                                Text(
+                                  'Keep me signed in',
+                                  style: t.bodySmall?.copyWith(color: AppColors.muted(b)),
+                                ),
                                 const Spacer(),
                                 TextButton(
                                   onPressed: () => Get.snackbar(
@@ -172,13 +220,18 @@ class _LoginViewState extends State<LoginView> {
                                     'A studio recovery link has been sent to your email.',
                                     snackPosition: SnackPosition.BOTTOM,
                                   ),
-                                  child: Text('Forgot?', style: t.labelMedium?.copyWith(color: AppColors.accentBright)),
+                                  child: Text(
+                                    'Forgot?',
+                                    style: t.labelMedium?.copyWith(
+                                      color: AppColors.accentBright,
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),
                             const SizedBox(height: AppSpacing.sm),
                             VpButton(
-                              label: 'Sign In to Studio',
+                              label: _loading ? 'Signing In...' : 'Sign In to Studio',
                               icon: Icons.login_rounded,
                               onPressed: _enterStudio,
                             ),
@@ -192,7 +245,13 @@ class _LoginViewState extends State<LoginView> {
                           Expanded(child: Divider(color: AppColors.border(b))),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: Text('OR CONTINUE WITH', style: t.labelSmall?.copyWith(color: AppColors.muted(b), letterSpacing: 1.1)),
+                            child: Text(
+                              'OR CONTINUE WITH',
+                              style: t.labelSmall?.copyWith(
+                                color: AppColors.muted(b),
+                                letterSpacing: 1.1,
+                              ),
+                            ),
                           ),
                           Expanded(child: Divider(color: AppColors.border(b))),
                         ],
@@ -204,7 +263,7 @@ class _LoginViewState extends State<LoginView> {
                             child: _SocialButton(
                               icon: Icons.g_mobiledata_rounded,
                               label: 'Google',
-                              onTap: _enterStudio,
+                              onTap: _enterGuestMode,
                             ),
                           ),
                           const SizedBox(width: AppSpacing.sm),
@@ -212,7 +271,7 @@ class _LoginViewState extends State<LoginView> {
                             child: _SocialButton(
                               icon: Icons.apple_rounded,
                               label: 'Apple ID',
-                              onTap: _enterStudio,
+                              onTap: _enterGuestMode,
                             ),
                           ),
                         ],
@@ -222,14 +281,23 @@ class _LoginViewState extends State<LoginView> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text("Don't have a studio account? ", style: t.bodyMedium?.copyWith(color: AppColors.muted(b))),
+                            Text(
+                              "Don't have a studio account? ",
+                              style: t.bodyMedium?.copyWith(color: AppColors.muted(b)),
+                            ),
                             GestureDetector(
-                              onTap: () => Get.to(() => const SignupView(), transition: Transition.rightToLeftWithFade),
+                              onTap: () => Get.to(
+                                () => const SignupView(),
+                                transition: Transition.rightToLeftWithFade,
+                              ),
                               child: ShaderMask(
                                 shaderCallback: (r) => AppColors.signature.createShader(r),
                                 child: Text(
                                   'Create Account',
-                                  style: t.labelLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
+                                  style: t.labelLarge?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                             ),

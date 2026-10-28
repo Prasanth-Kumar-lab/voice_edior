@@ -16,9 +16,9 @@ class SignupView extends StatefulWidget {
 }
 
 class _SignupViewState extends State<SignupView> {
-  final TextEditingController _nameCtrl = TextEditingController(text: 'Alex Rivera');
-  final TextEditingController _emailCtrl = TextEditingController(text: 'alex@podcaststudio.io');
-  final TextEditingController _passCtrl = TextEditingController(text: 'studio123');
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _emailCtrl = TextEditingController();
+  final TextEditingController _passCtrl = TextEditingController();
   String _selectedRole = 'Podcaster';
   bool _obscure = true;
   bool _agreeTerms = true;
@@ -41,8 +41,20 @@ class _SignupViewState extends State<SignupView> {
 
   Future<void> _completeSignup() async {
     if (_loading) return;
+    if (_nameCtrl.text.trim().isEmpty ||
+        _emailCtrl.text.trim().isEmpty ||
+        _passCtrl.text.length < 6) {
+      Get.snackbar(
+        'Check Fields',
+        'Please enter your name, a valid email, and a password of at least 6 characters.',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: AppColors.danger,
+        colorText: Colors.white,
+      );
+      return;
+    }
     setState(() => _loading = true);
-    await Get.find<AdminController>().signupWithMongo(
+    final String? err = await Get.find<AdminController>().signupWithMongo(
       name: _nameCtrl.text.trim(),
       email: _emailCtrl.text.trim(),
       password: _passCtrl.text,
@@ -50,7 +62,21 @@ class _SignupViewState extends State<SignupView> {
     );
     if (!mounted) return;
     setState(() => _loading = false);
-    Get.offAll(() => const MainShellView(), transition: Transition.fadeIn, duration: const Duration(milliseconds: 350));
+    if (err != null) {
+      Get.snackbar(
+        'Registration Failed',
+        err,
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: AppColors.danger,
+        colorText: Colors.white,
+      );
+      return;
+    }
+    Get.offAll(
+      () => const MainShellView(),
+      transition: Transition.fadeIn,
+      duration: const Duration(milliseconds: 350),
+    );
   }
 
   @override
@@ -71,7 +97,10 @@ class _SignupViewState extends State<SignupView> {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 gradient: RadialGradient(
-                  colors: [AppColors.accentBright.withValues(alpha: 0.20), Colors.transparent],
+                  colors: [
+                    AppColors.accentBright.withValues(alpha: 0.20),
+                    Colors.transparent,
+                  ],
                 ),
               ),
             ),
@@ -81,7 +110,10 @@ class _SignupViewState extends State<SignupView> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 480),
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg, vertical: AppSpacing.md),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.lg,
+                    vertical: AppSpacing.md,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -103,16 +135,22 @@ class _SignupViewState extends State<SignupView> {
                             ),
                             child: Text(
                               '7-DAY PRO TRIAL',
-                              style: t.labelSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
+                              style: t.labelSmall?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: AppSpacing.md),
-                      Text('Build your sound\nin seconds', style: t.displaySmall?.copyWith(fontWeight: FontWeight.w800, height: 1.15))
-                          .animate()
-                          .fadeIn()
-                          .slideY(begin: 0.1),
+                      Text(
+                        'Build your sound\nin seconds',
+                        style: t.displaySmall?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          height: 1.15,
+                        ),
+                      ).animate().fadeIn().slideY(begin: 0.1),
                       const SizedBox(height: 6),
                       Text(
                         'Unlock AI spectral noise removal, speaking-driven theatrical bass, and broadcast LUFS mastering.',
@@ -132,24 +170,38 @@ class _SignupViewState extends State<SignupView> {
                               onTap: () => setState(() => _selectedRole = role),
                               child: AnimatedContainer(
                                 duration: const Duration(milliseconds: 200),
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 10,
+                                ),
                                 decoration: BoxDecoration(
                                   borderRadius: AppRadius.chip,
-                                  gradient: _selectedRole == role ? AppColors.signature : null,
+                                  gradient:
+                                      _selectedRole == role ? AppColors.signature : null,
                                   color: _selectedRole == role ? null : AppColors.surface(b),
                                   border: Border.all(
-                                    color: _selectedRole == role ? Colors.transparent : AppColors.border(b),
+                                    color: _selectedRole == role
+                                        ? Colors.transparent
+                                        : AppColors.border(b),
                                   ),
                                 ),
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(icon, size: 16, color: _selectedRole == role ? Colors.white : AppColors.accentBright),
+                                    Icon(
+                                      icon,
+                                      size: 16,
+                                      color: _selectedRole == role
+                                          ? Colors.white
+                                          : AppColors.accentBright,
+                                    ),
                                     const SizedBox(width: 6),
                                     Text(
                                       role,
                                       style: t.labelLarge?.copyWith(
-                                        color: _selectedRole == role ? Colors.white : AppColors.text(b),
+                                        color: _selectedRole == role
+                                            ? Colors.white
+                                            : AppColors.text(b),
                                       ),
                                     ),
                                   ],
@@ -193,11 +245,16 @@ class _SignupViewState extends State<SignupView> {
                               controller: _passCtrl,
                               obscureText: _obscure,
                               decoration: InputDecoration(
-                                hintText: 'Minimum 8 characters',
+                                hintText: 'Minimum 6 characters',
                                 prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
                                 suffixIcon: IconButton(
                                   onPressed: () => setState(() => _obscure = !_obscure),
-                                  icon: Icon(_obscure ? Icons.visibility_off_outlined : Icons.visibility_outlined, size: 20),
+                                  icon: Icon(
+                                    _obscure
+                                        ? Icons.visibility_off_outlined
+                                        : Icons.visibility_outlined,
+                                    size: 20,
+                                  ),
                                 ),
                               ),
                             ),
@@ -224,7 +281,9 @@ class _SignupViewState extends State<SignupView> {
                             ),
                             const SizedBox(height: AppSpacing.md),
                             VpButton(
-                              label: 'Launch Studio Workspace',
+                              label: _loading
+                                  ? 'Creating Workspace...'
+                                  : 'Launch Studio Workspace',
                               icon: Icons.rocket_launch_rounded,
                               onPressed: _completeSignup,
                             ),
@@ -237,14 +296,20 @@ class _SignupViewState extends State<SignupView> {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text('Already registered? ', style: t.bodyMedium?.copyWith(color: AppColors.muted(b))),
+                            Text(
+                              'Already registered? ',
+                              style: t.bodyMedium?.copyWith(color: AppColors.muted(b)),
+                            ),
                             GestureDetector(
                               onTap: Get.back,
                               child: ShaderMask(
                                 shaderCallback: (r) => AppColors.signature.createShader(r),
                                 child: Text(
                                   'Sign In',
-                                  style: t.labelLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
+                                  style: t.labelLarge?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                             ),

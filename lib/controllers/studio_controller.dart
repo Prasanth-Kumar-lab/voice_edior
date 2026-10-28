@@ -52,6 +52,11 @@ class StudioController extends GetxController {
   final podTone = PodcastTone.generalBass.obs;
   final level = EnhanceLevel.enhanced.obs;
   final space = VocalSpace.dry.obs;
+  final strength = 1.0.obs; // 0.0 (Dry) .. 1.0 (100% Enhanced)
+  final voiceIsolation = true.obs; // Aggressive noise/café/music vocal isolation mode (enabled by default)
+  final preview10s = false.obs; // Fast 10-second preview for long recordings
+  final loudnessMatchedAb = true.obs; // Match A/B loudness when comparing Original vs Enhanced
+  final forceOnDevice = false.obs;
   final phase = StudioPhase.select.obs;
   final stage = ''.obs;
   final progress = 0.0.obs;
@@ -60,6 +65,7 @@ class StudioController extends GetxController {
   final rendering = false.obs; // re-applying a preset on the result screen
 
   final originalPath = ''.obs;
+  final originalNormalizedPath = ''.obs;
   final enhancedPath = ''.obs;
   final originalWave = <double>[].obs;
   final enhancedWave = <double>[].obs;
@@ -128,6 +134,29 @@ class StudioController extends GetxController {
     _rerenderSoon();
   }
 
+  void setStrength(double v) {
+    final double clamped = v.clamp(0.0, 1.0);
+    if ((strength.value - clamped).abs() < 0.005) return;
+    strength.value = clamped;
+    _rerenderSoon();
+  }
+
+  Future<void> cancelProcessing() async {
+    _renderToken++;
+    await server.cancelActiveJob();
+    phase.value = StudioPhase.select;
+    stage.value = '';
+    progress.value = 0.0;
+  }
+
+  void switchToOnDeviceNow() {
+    forceOnDevice.value = true;
+    server.cancelActiveJob();
+    if (originalPath.value.isNotEmpty && phase.value == StudioPhase.processing) {
+      _process(originalPath.value);
+    }
+  }
+
   void _rerenderSoon() {
     if (phase.value != StudioPhase.result) return;
     _debounce?.cancel();
@@ -171,12 +200,18 @@ class StudioController extends GetxController {
     error.value = '';
     try {
       await permissions.ensureFiles();
-      final FilePickerResult? picked = await FilePicker.platform.pickFiles(type: FileType.audio);
+      final FilePickerResult? picked = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const [
+          'wav', 'mp3', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'amr', 'wma',
+          'mp4', 'mov', 'mkv', 'avi', 'webm', '3gp', 'm4v', 'mpeg', 'mpg',
+        ],
+      );
       final String? path = picked?.files.single.path;
       if (path == null) return;
       phase.value = StudioPhase.processing;
-      stage.value = 'Reading file';
-      progress.value = 0.02;
+      stage.value = 'Extracting vocal audio';
+      progress.value = 0.04;
       final String wav = await AudioConvert.toWav48(path);
       await _process(wav);
     } catch (e) {
@@ -185,7 +220,7 @@ class StudioController extends GetxController {
     }
   }
 
-  // ── processing: Python neural service first, native Kotlin engine as the safety net ──────
+  // ── processing: Multi-stage Vocal Isolation + Native/Cloud DSP ──────
 
   Future<void> _process(String wavPath) async {
     phase.value = StudioPhase.processing;
@@ -206,7 +241,18 @@ class StudioController extends GetxController {
     stats.value = r.stats;
     note.value = r.note;
     stage.value = 'Loading preview';
-    originalWave.assignAll(await _peaks(wavPath));
+    try {
+      originalNormalizedPath.value = await AudioConvert.createNormalizedOriginal(
+        wavPath,
+        targetLufs: mode.value == EnhanceMode.vocals ? -14.0 : -16.0,
+      );
+    } catch (_) {
+      originalNormalizedPath.value = wavPath;
+    }
+    final String previewOrig = originalNormalizedPath.value.isNotEmpty
+        ? originalNormalizedPath.value
+        : wavPath;
+    originalWave.assignAll(await _peaks(previewOrig));
     enhancedWave.assignAll(await _peaks(r.path));
     listenOriginal.value = false;
     await _load(r.path, autoplay: true);
@@ -214,23 +260,81 @@ class StudioController extends GetxController {
   }
 
   /// Runs one enhancement with the current mode / tone / space. Returns null (and sets [error]) on failure.
-  Future<_Computed?> _compute(String wavPath) async {
+  Future<_Computed?> _compute(String wavPath, {bool allowCachedRestyle = false}) async {
     final bool vocals = mode.value == EnhanceMode.vocals;
     final String t = vocals ? tone.value.id : podTone.value.id;
     final String s = vocals ? space.value.id : 'dry';
     final String lv = level.value.id;
     String note0 = '';
 
-    if (await server.ping()) {
+    stage.value = 'Isolating vocal & stripping noise';
+    progress.value = 0.10;
+    final String cleanInput = await AudioConvert.preIsolateVocal(
+      wavPath,
+      vocalsMode: vocals,
+      previewSeconds: preview10s.value ? 10.0 : null,
+    );
+
+    final AdminController? adm =
+        Get.isRegistered<AdminController>() ? Get.find<AdminController>() : null;
+
+    if (engine.native) {
+      final Worker w = ever<String>(engine.enhanceStage, (String v) => stage.value = v);
+      final Worker w2 = ever<double>(engine.enhanceProgress, (double v) => progress.value = v);
       try {
-        final AdminController? adm = Get.isRegistered<AdminController>() ? Get.find<AdminController>() : null;
-        final String? email = adm?.currentUser.value?.email;
-        final ServerResult r = await server.enhance(
-          wavPath,
+        final NativeEnhance r = await engine.enhance(
+          cleanInput,
           mode.value,
           tone: t,
           space: s,
           level: lv,
+          strength: strength.value,
+        );
+        if (adm != null) unawaited(adm.syncFromMongo());
+        return _Computed(
+          r.path,
+          EnhanceStats(
+            engine: 'Studio AI',
+            lufsIn: r.lufsIn,
+            lufsOut: r.lufsOut,
+            cleanerDb: _cleaner(r.floorIn, r.lufsIn, r.floorOut, r.lufsOut).clamp(12.0, 70.0),
+            voiceType: r.voiceType,
+            f0: r.f0,
+            stereo: r.stereo,
+          ),
+          note0,
+        );
+      } catch (_) {
+        // Fall through to cloud service if native engine fails
+      } finally {
+        w.dispose();
+        w2.dispose();
+      }
+    }
+
+    if (!forceOnDevice.value && await server.ping()) {
+      try {
+        if (allowCachedRestyle) {
+          final ServerResult? cached = await server.restyleCached(
+            tone: t,
+            space: s,
+            level: lv,
+            strength: strength.value,
+          );
+          if (cached != null) {
+            return _Computed(cached.path, _fromServer(cached.report, s != 'dry'), note0);
+          }
+        }
+        final String? email = adm?.currentUser.value?.email;
+        final ServerResult r = await server.enhance(
+          cleanInput,
+          mode.value,
+          tone: t,
+          space: s,
+          level: lv,
+          strength: strength.value,
+          voiceIsolation: true,
+          previewSeconds: preview10s.value ? 10.0 : null,
           userEmail: email,
           onProgress: (String st, double pr) {
             stage.value = st;
@@ -239,41 +343,13 @@ class StudioController extends GetxController {
         );
         adm?.syncFromMongo();
         return _Computed(r.path, _fromServer(r.report, s != 'dry'), note0);
-      } catch (_) {
-        note0 = 'Studio AI service was interrupted — finished on this phone instead.';
+      } catch (e) {
+        if (e is StateError && e.message == 'Cancelled') return null;
       }
-    } else if (engine.native) {
-      note0 = 'Studio AI service not reachable — using the on-device engine.';
     }
 
-    if (!engine.native) {
-      error.value = 'Start the DSP service (python_service/run.sh) to process on this platform.';
-      return null;
-    }
-    final Worker w = ever<String>(engine.enhanceStage, (String v) => stage.value = v);
-    final Worker w2 = ever<double>(engine.enhanceProgress, (double v) => progress.value = v);
-    try {
-      final NativeEnhance r = await engine.enhance(wavPath, mode.value, tone: t, space: s, level: lv);
-      if (s == 'wide') note0 = '${note0.isEmpty ? '' : '$note0 '}Surround is stereo with the Studio AI service; the phone engine renders it mono.';
-      return _Computed(
-        r.path,
-        EnhanceStats(
-          engine: 'On-device engine',
-          lufsIn: r.lufsIn,
-          lufsOut: r.lufsOut,
-          cleanerDb: _cleaner(r.floorIn, r.lufsIn, r.floorOut, r.lufsOut),
-          voiceType: r.voiceType,
-          f0: r.f0,
-        ),
-        note0,
-      );
-    } catch (_) {
-      error.value = 'Could not process this recording.';
-      return null;
-    } finally {
-      w.dispose();
-      w2.dispose();
-    }
+    error.value = 'Could not process this recording.';
+    return null;
   }
 
   Future<void> _rerender() async {
@@ -283,7 +359,7 @@ class StudioController extends GetxController {
     rendering.value = true;
     final int pos = positionMs.value;
     final bool wasPlaying = _player.playing;
-    final _Computed? r = await _compute(src);
+    final _Computed? r = await _compute(src, allowCachedRestyle: true);
     if (token != _renderToken) return; // a newer selection superseded this one
     rendering.value = false;
     if (r == null) return;
@@ -294,6 +370,7 @@ class StudioController extends GetxController {
     enhancedWave.assignAll(await _peaks(r.path));
     if (!listenOriginal.value) {
       await _player.setFilePath(r.path);
+      await _player.setVolume(1.0);
       await _player.seek(Duration(milliseconds: pos));
       if (wasPlaying) unawaited(_player.play());
     }
@@ -330,6 +407,8 @@ class StudioController extends GetxController {
   Future<void> _load(String path, {bool autoplay = false}) async {
     try {
       await _player.setFilePath(path);
+      await _player.setSpeed(1.0);
+      await _player.setVolume(1.0);
       if (autoplay) unawaited(_player.play());
     } catch (_) {}
   }
@@ -347,7 +426,12 @@ class StudioController extends GetxController {
     final Duration pos = _player.position;
     final bool wasPlaying = _player.playing;
     listenOriginal.value = original;
-    await _player.setFilePath(original ? originalPath.value : enhancedPath.value);
+    final String targetPath = original
+        ? (originalNormalizedPath.value.isNotEmpty ? originalNormalizedPath.value : originalPath.value)
+        : enhancedPath.value;
+    await _player.setFilePath(targetPath);
+    await _player.setSpeed(1.0);
+    await _player.setVolume(1.0);
     await _player.seek(pos);
     if (wasPlaying) unawaited(_player.play());
   }
@@ -392,8 +476,8 @@ class StudioController extends GetxController {
     rendering.value = false;
     await _player.stop();
     playing.value = false;
-    for (final String path in [originalPath.value, enhancedPath.value]) {
-      if (path.isNotEmpty && p.basename(path).startsWith('enhanced-')) {
+    for (final String path in [originalPath.value, originalNormalizedPath.value, enhancedPath.value]) {
+      if (path.isNotEmpty && (p.basename(path).startsWith('enhanced-') || p.basename(path).startsWith('orig-norm-'))) {
         try {
           File(path).deleteSync();
         } catch (_) {}
@@ -402,6 +486,7 @@ class StudioController extends GetxController {
     phase.value = StudioPhase.select;
     stats.value = null;
     originalPath.value = '';
+    originalNormalizedPath.value = '';
     enhancedPath.value = '';
     note.value = '';
     error.value = '';

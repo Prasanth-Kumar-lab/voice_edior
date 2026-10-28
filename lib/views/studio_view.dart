@@ -17,7 +17,13 @@ import '../widgets/common/vp_pro.dart';
 import '../widgets/common/vp_waveform.dart';
 
 class StudioView extends GetView<StudioController> {
-  const StudioView({super.key, this.onOpenSubscription, this.onOpenProfile});
+  const StudioView({
+    super.key,
+    this.onOpenMixStudio,
+    this.onOpenSubscription,
+    this.onOpenProfile,
+  });
+  final VoidCallback? onOpenMixStudio;
   final VoidCallback? onOpenSubscription;
   final VoidCallback? onOpenProfile;
 
@@ -43,7 +49,10 @@ class StudioView extends GetView<StudioController> {
                         StudioPhase.select => _SelectPage(controller, onOpenSubscription: onOpenSubscription),
                         StudioPhase.recording => _RecordingPage(controller),
                         StudioPhase.processing => _ProcessingPage(controller),
-                        StudioPhase.result => _ResultPage(controller),
+                        StudioPhase.result => _ResultPage(
+                            controller,
+                            onOpenMixStudio: onOpenMixStudio,
+                          ),
                       };
                       return AnimatedSwitcher(
                         duration: const Duration(milliseconds: 320),
@@ -192,9 +201,9 @@ class _Header extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodyMedium,
                 )),
             const SizedBox(height: 12),
-            TextField(controller: c, decoration: const InputDecoration(hintText: 'http://192.168.1.20:8088')),
+            TextField(controller: c, decoration: const InputDecoration(hintText: 'https://voice-edior.onrender.com')),
             const SizedBox(height: 8),
-            Text('USB: run  adb reverse tcp:8088 tcp:8088', style: Theme.of(context).textTheme.bodySmall),
+            Text('Connected via Render cloud API', style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
         actions: [
@@ -254,7 +263,7 @@ class _SelectPage extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Text('Zero-Noise + Sub-Bass', style: t.labelSmall?.copyWith(color: AppColors.accentBright)),
+                        Text('Zero-Noise + Pitch-Adaptive Body', style: t.labelSmall?.copyWith(color: AppColors.accentBright)),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -294,6 +303,27 @@ class _SelectPage extends StatelessWidget {
           curve: Curves.easeOutCubic,
           alignment: Alignment.topCenter,
           child: Obx(() => c.mode.value == EnhanceMode.vocals ? _VocalPickers(c) : _PodcastPickers(c)),
+        ),
+        const SizedBox(height: AppSpacing.md),
+        Obx(
+          () => Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilterChip(
+                avatar: const Icon(Icons.noise_control_off_rounded, size: 16),
+                label: const Text('Voice Isolation (Café / Street)'),
+                selected: c.voiceIsolation.value,
+                onSelected: (v) => c.voiceIsolation.value = v,
+              ),
+              FilterChip(
+                avatar: const Icon(Icons.timer_outlined, size: 16),
+                label: const Text('10s Quick Preview'),
+                selected: c.preview10s.value,
+                onSelected: (v) => c.preview10s.value = v,
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: AppSpacing.lg),
         VpButton(label: 'Record in Studio', icon: Icons.fiber_manual_record_rounded, onPressed: c.startRecording),
@@ -465,6 +495,33 @@ class _ProcessingPage extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 0),
                   child: Text(c.note.value, textAlign: TextAlign.center, style: t.bodySmall?.copyWith(color: AppColors.warning)),
                 )),
+          Obx(() => c.server.wakingUp.value
+              ? Padding(
+                  padding: const EdgeInsets.only(top: AppSpacing.md),
+                  child: VpCard(
+                    child: Column(
+                      children: [
+                        Text(
+                          'Waking up cloud AI (15–30s on free plan)...',
+                          style: t.labelMedium?.copyWith(color: AppColors.warning),
+                        ),
+                        const SizedBox(height: 6),
+                        TextButton.icon(
+                          onPressed: c.switchToOnDeviceNow,
+                          icon: const Icon(Icons.phone_android_rounded, size: 16),
+                          label: const Text('Use On-Device Engine Now'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink()),
+          const SizedBox(height: AppSpacing.lg),
+          TextButton.icon(
+            onPressed: c.cancelProcessing,
+            icon: const Icon(Icons.close_rounded, size: 18),
+            label: const Text('Cancel Processing'),
+          ),
         ],
       ),
     );
@@ -474,8 +531,9 @@ class _ProcessingPage extends StatelessWidget {
 // ───────────────────────────── result ─────────────────────────────
 
 class _ResultPage extends StatelessWidget {
-  const _ResultPage(this.c);
+  const _ResultPage(this.c, {this.onOpenMixStudio});
   final StudioController c;
+  final VoidCallback? onOpenMixStudio;
 
   @override
   Widget build(BuildContext context) {
@@ -514,7 +572,38 @@ class _ResultPage extends StatelessWidget {
                       )),
                   const SizedBox(width: AppSpacing.sm),
                   Obx(() => Text('${formatDuration(c.positionMs.value)} / ${formatDuration(c.durationMs.value)}', style: t.labelLarge)),
+                  const Spacer(),
+                  Obx(
+                    () => FilterChip(
+                      visualDensity: VisualDensity.compact,
+                      label: const Text('Match A/B Loudness', style: TextStyle(fontSize: 11)),
+                      selected: c.loudnessMatchedAb.value,
+                      onSelected: (v) => c.loudnessMatchedAb.value = v,
+                    ),
+                  ),
                 ],
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              Obx(
+                () => Row(
+                  children: [
+                    Icon(Icons.tune_rounded, size: 16, color: AppColors.muted(b)),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Strength ${(c.strength.value * 100).round()}%',
+                      style: t.labelMedium,
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: c.strength.value,
+                        min: 0.0,
+                        max: 1.0,
+                        divisions: 20,
+                        onChanged: c.setStrength,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -549,6 +638,7 @@ class _ResultPage extends StatelessWidget {
         Obx(() => VpButton(
               label: c.savedTo.value.isEmpty ? 'Save to device' : 'Saved · ${c.savedTo.value}',
               icon: c.savedTo.value.isEmpty ? Icons.download_rounded : Icons.check_rounded,
+              filled: true,
               onPressed: c.save,
             )),
         const SizedBox(height: AppSpacing.sm),
@@ -770,10 +860,16 @@ class _VocalPickers extends StatelessWidget {
 }
 
 class _PresetChip extends StatelessWidget {
-  const _PresetChip({required this.label, required this.selected, required this.onTap});
+  const _PresetChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+  });
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
@@ -790,9 +886,25 @@ class _PresetChip extends StatelessWidget {
           color: selected ? null : AppColors.surface(b),
           border: Border.all(color: selected ? Colors.transparent : AppColors.border(b)),
         ),
-        child: Text(
-          label,
-          style: Theme.of(context).textTheme.labelLarge?.copyWith(color: selected ? Colors.white : AppColors.text(b)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(
+                icon,
+                size: 15,
+                color: selected ? Colors.white : AppColors.accentBright,
+              ),
+              const SizedBox(width: 6),
+            ],
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                color: selected ? Colors.white : AppColors.text(b),
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -824,18 +936,25 @@ class _PodcastPickers extends StatelessWidget {
     final Widget body = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (live)
+        if (live) ...[
           Row(
             children: [
-              Expanded(child: Text('Try another sound', style: t.titleMedium)),
+              Expanded(
+                child: Text(
+                  'Try another sound',
+                  style: t.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
               Obx(() => c.rendering.value
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : const SizedBox.shrink()),
             ],
           ),
-        if (live) const SizedBox(height: AppSpacing.sm),
-        _label(context, 'Voice', Icons.record_voice_over_rounded),
-        const SizedBox(height: 8),
+          const SizedBox(height: AppSpacing.sm),
+        ] else ...[
+          _label(context, 'Voice Profile', Icons.record_voice_over_rounded),
+          const SizedBox(height: 8),
+        ],
         Obx(() {
           final List<PodcastTone> tones = Get.find<AdminController>().dynamicPodcastTones;
           return Wrap(
@@ -845,31 +964,57 @@ class _PodcastPickers extends StatelessWidget {
               for (final PodcastTone tone in tones)
                 _PresetChip(
                   label: tone.label,
+                  icon: tone.icon,
                   selected: c.podTone.value.id == tone.id,
                   onTap: () => c.selectPodcastTone(tone),
                 ),
             ],
           );
         }),
-        Obx(() => Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(c.podTone.value.blurb, style: t.bodySmall?.copyWith(color: AppColors.muted(b))),
-            )),
-        const SizedBox(height: AppSpacing.md),
-        _label(context, 'Enhance', Icons.auto_awesome_rounded),
-        const SizedBox(height: 8),
-        Obx(() => Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final EnhanceLevel lv in EnhanceLevel.all)
-                  _PresetChip(label: lv.label, selected: c.level.value == lv, onTap: () => c.selectLevel(lv)),
-              ],
-            )),
-        Obx(() => Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(c.level.value.blurb, style: t.bodySmall?.copyWith(color: AppColors.muted(b))),
-            )),
+        Obx(() {
+          final PodcastTone tone = c.podTone.value;
+          return Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                borderRadius: AppRadius.button,
+                color: AppColors.surfaceAlt(b),
+                border: Border.all(color: AppColors.border(b)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      borderRadius: AppRadius.chip,
+                      color: tone.id == 'theatrical'
+                          ? AppColors.warning.withValues(alpha: 0.2)
+                          : AppColors.accent.withValues(alpha: 0.2),
+                    ),
+                    child: Text(
+                      tone.tag.toUpperCase(),
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        color: tone.id == 'theatrical'
+                            ? AppColors.warning
+                            : AppColors.accentBright,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      tone.blurb,
+                      style: t.bodySmall?.copyWith(color: AppColors.muted(b)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
       ],
     );
     return Padding(

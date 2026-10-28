@@ -73,6 +73,40 @@ object WavFile {
         Writer(path, clip.sampleRate).use { it.write(clip.samples, 0, clip.samples.size) }
     }
 
+    /** Writes a 2-channel stereo 16-bit PCM WAV with TPDF dither (for Surround / Theatrical space). */
+    fun writeStereo(path: String, left: FloatArray, right: FloatArray, sampleRate: Int) {
+        val frames = minOf(left.size, right.size)
+        val dataBytes = frames * 4
+        RandomAccessFile(File(path).also { it.parentFile?.mkdirs() }, "rw").use { raf ->
+            raf.setLength(0)
+            val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+            h.put("RIFF".toByteArray()).putInt(36 + dataBytes).put("WAVE".toByteArray())
+            h.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(2)
+            h.putInt(sampleRate).putInt(sampleRate * 4).putShort(4).putShort(16)
+            h.put("data".toByteArray()).putInt(dataBytes)
+            raf.write(h.array())
+
+            val rnd = java.util.Random(11)
+            val chunk = 8192
+            val buf = ByteArray(chunk * 4)
+            var done = 0
+            while (done < frames) {
+                val n = minOf(chunk, frames - done)
+                val bb = ByteBuffer.wrap(buf, 0, n * 4).order(ByteOrder.LITTLE_ENDIAN)
+                for (i in 0 until n) {
+                    val dl = (rnd.nextFloat() - rnd.nextFloat()) / 32768f
+                    val dr = (rnd.nextFloat() - rnd.nextFloat()) / 32768f
+                    val vl = ((left[done + i] + dl).coerceIn(-1f, 1f) * 32767f).roundToInt().toShort()
+                    val vr = ((right[done + i] + dr).coerceIn(-1f, 1f) * 32767f).roundToInt().toShort()
+                    bb.putShort(vl)
+                    bb.putShort(vr)
+                }
+                raf.write(buf, 0, n * 4)
+                done += n
+            }
+        }
+    }
+
     /** Streaming mono PCM16 writer with TPDF dither; header is patched on close. */
     class Writer(val path: String, private val sampleRate: Int) : AutoCloseable {
         private val raf = RandomAccessFile(File(path).also { it.parentFile?.mkdirs() }, "rw")

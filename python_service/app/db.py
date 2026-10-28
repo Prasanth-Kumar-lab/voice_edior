@@ -1,44 +1,169 @@
 """MongoDB integration for VocalPolish Studio (`vocalpolish_studio` database).
 
 Creates and manages the `vocalpolish_studio` database in local MongoDB (visible in MongoDB Compass)
-while preserving all existing databases on the server.
+while preserving all existing databases on the server. Includes a transparent in-memory collection
+fallback when `VP_IN_MEMORY_DB=1` or when MongoDB is unreachable in isolated CI environments.
 """
 from __future__ import annotations
 
-import hashlib
+import copy
 import os
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from pymongo import MongoClient
 from pymongo.database import Database
 
+from .auth import hash_password
 from .presets import PODCAST_TONES
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017")
 DB_NAME = os.getenv("MONGO_DB", "vocalpolish_studio")
+_SEED_PW = os.getenv("VP_SEED_PASSWORD", "studio123")
 
 _client: Optional[MongoClient] = None
-_db: Optional[Database] = None
+_db: Any = None
 
 
 def _hash_pw(password: str) -> str:
-    return hashlib.sha256(f"vp_salt_{password}".encode("utf-8")).hexdigest()
+    """Per-user salted scrypt password hash."""
+    return hash_password(password)
 
 
-def get_db() -> Database:
+# ───────────────────────────── IN-MEMORY FALLBACK FOR OFFLINE/CI TESTS ─────────────────────────────
+
+class _MemCursor:
+    def __init__(self, docs: List[Dict[str, Any]]) -> None:
+        self._docs = docs
+
+    def sort(self, key: str, direction: int = 1) -> "_MemCursor":
+        rev = direction < 0
+        self._docs.sort(key=lambda d: d.get(key, 0), reverse=rev)
+        return self
+
+    def limit(self, count: int) -> "_MemCursor":
+        self._docs = self._docs[:count]
+        return self
+
+    def __iter__(self):
+        return iter(copy.deepcopy(self._docs))
+
+
+class _MemCollection:
+    def __init__(self) -> None:
+        self._docs: List[Dict[str, Any]] = []
+
+    @staticmethod
+    def _matches(doc: Dict[str, Any], query: Dict[str, Any]) -> bool:
+        for k, v in query.items():
+            if doc.get(k) != v:
+                return False
+        return True
+
+    def count_documents(self, query: Dict[str, Any]) -> int:
+        return sum(1 for d in self._docs if self._matches(d, query))
+
+    def find(self, query: Optional[Dict[str, Any]] = None) -> _MemCursor:
+        q = query or {}
+        return _MemCursor([d for d in self._docs if self._matches(d, q)])
+
+    def find_one(self, query: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        q = query or {}
+        for d in self._docs:
+            if self._matches(d, q):
+                return copy.deepcopy(d)
+        return None
+
+    def insert_one(self, doc: Dict[str, Any]) -> None:
+        self._docs.append(copy.deepcopy(doc))
+
+    def insert_many(self, docs: Iterable[Dict[str, Any]]) -> None:
+        for d in docs:
+            self._docs.append(copy.deepcopy(d))
+
+    def update_one(self, query: Dict[str, Any], update: Dict[str, Any], upsert: bool = False) -> None:
+        for d in self._docs:
+            if self._matches(d, query):
+                if "$set" in update:
+                    d.update(copy.deepcopy(update["$set"]))
+                if "$inc" in update:
+                    for ik, iv in update["$inc"].items():
+                        d[ik] = d.get(ik, 0) + iv
+                return
+        if upsert:
+            new_doc = dict(query)
+            if "$set" in update:
+                new_doc.update(copy.deepcopy(update["$set"]))
+            if "$inc" in update:
+                for ik, iv in update["$inc"].items():
+                    new_doc[ik] = new_doc.get(ik, 0) + iv
+            self._docs.append(new_doc)
+
+    def replace_one(self, query: Dict[str, Any], replacement: Dict[str, Any], upsert: bool = False) -> None:
+        for idx, d in enumerate(self._docs):
+            if self._matches(d, query):
+                self._docs[idx] = copy.deepcopy(replacement)
+                return
+        if upsert:
+            self._docs.append(copy.deepcopy(replacement))
+
+    def delete_one(self, query: Dict[str, Any]) -> None:
+        for idx, d in enumerate(self._docs):
+            if self._matches(d, query):
+                self._docs.pop(idx)
+                return
+
+
+class _MemDatabase:
+    def __init__(self) -> None:
+        self.users = _MemCollection()
+        self.plans = _MemCollection()
+        self.features = _MemCollection()
+        self.transactions = _MemCollection()
+        self.settings = _MemCollection()
+        self.jobs = _MemCollection()
+
+
+def reset_db_for_tests() -> Any:
+    """Reset the database to a clean in-memory seeded instance for deterministic unit testing."""
+    global _db
+    _db = _MemDatabase()
+    _seed_if_empty(_db)
+    _ensure_admin_roles(_db)
+    _sync_dynamic_presets(_db)
+    return _db
+
+
+def get_db() -> Any:
     global _client, _db
     if _db is None:
-        _client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
-        _db = _client[DB_NAME]
+        if os.getenv("VP_IN_MEMORY_DB") == "1":
+            _db = _MemDatabase()
+        else:
+            try:
+                _client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2500)
+                _client.admin.command("ping")
+                _db = _client[DB_NAME]
+            except Exception:
+                _db = _MemDatabase()
         _seed_if_empty(_db)
+        _ensure_admin_roles(_db)
         _sync_dynamic_presets(_db)
     return _db
 
 
 def _now_str() -> str:
     return datetime.now().strftime("%b %d, %Y · %I:%M %p")
+
+
+def _ensure_admin_roles(db: Any) -> None:
+    """Guarantee the primary studio administrator account has `role_type: 'admin'`."""
+    admin_email = os.getenv("VP_ADMIN_EMAIL", "alex@podcaststudio.io").lower().strip()
+    db.users.update_one(
+        {"email": admin_email},
+        {"$set": {"role_type": "admin", "is_admin": True}},
+    )
 
 
 def _seed_if_empty(db: Database) -> None:
@@ -49,8 +174,10 @@ def _seed_if_empty(db: Database) -> None:
                 "id": "USR-1041",
                 "name": "Alex Rivera",
                 "email": "alex@podcaststudio.io",
-                "password_hash": _hash_pw("studio123"),
+                "password_hash": _hash_pw(_SEED_PW),
                 "role": "Podcaster",
+                "role_type": "admin",
+                "is_admin": True,
                 "plan_name": "Studio AI Pro",
                 "status": "active",
                 "masters_count": 148,
@@ -72,8 +199,10 @@ def _seed_if_empty(db: Database) -> None:
                 "id": "USR-1042",
                 "name": "Maya Lin",
                 "email": "maya.vocals@soundlab.co",
-                "password_hash": _hash_pw("studio123"),
+                "password_hash": _hash_pw(_SEED_PW),
                 "role": "Vocalist",
+                "role_type": "user",
+                "is_admin": False,
                 "plan_name": "Broadcast Master Suite",
                 "status": "active",
                 "masters_count": 312,
@@ -94,8 +223,10 @@ def _seed_if_empty(db: Database) -> None:
                 "id": "USR-1043",
                 "name": "Marcus Vance",
                 "email": "mvance@trailervoice.tv",
-                "password_hash": _hash_pw("studio123"),
+                "password_hash": _hash_pw(_SEED_PW),
                 "role": "Voiceover",
+                "role_type": "user",
+                "is_admin": False,
                 "plan_name": "Studio AI Pro",
                 "status": "active",
                 "masters_count": 94,
@@ -116,8 +247,10 @@ def _seed_if_empty(db: Database) -> None:
                 "id": "USR-1044",
                 "name": "Elena Rostova",
                 "email": "elena@streamcast.gg",
-                "password_hash": _hash_pw("studio123"),
+                "password_hash": _hash_pw(_SEED_PW),
                 "role": "Streamer",
+                "role_type": "user",
+                "is_admin": False,
                 "plan_name": "Creator Starter",
                 "status": "deactivated",
                 "masters_count": 19,
@@ -137,8 +270,10 @@ def _seed_if_empty(db: Database) -> None:
                 "id": "USR-1045",
                 "name": "Devon Brooks",
                 "email": "devon@indiepods.fm",
-                "password_hash": _hash_pw("studio123"),
+                "password_hash": _hash_pw(_SEED_PW),
                 "role": "Podcaster",
+                "role_type": "user",
+                "is_admin": False,
                 "plan_name": "Studio AI Pro",
                 "status": "active",
                 "masters_count": 205,
@@ -159,8 +294,10 @@ def _seed_if_empty(db: Database) -> None:
                 "id": "USR-1046",
                 "name": "Kiran Patel",
                 "email": "kiran@audiobookmaster.in",
-                "password_hash": _hash_pw("studio123"),
+                "password_hash": _hash_pw(_SEED_PW),
                 "role": "Voiceover",
+                "role_type": "user",
+                "is_admin": False,
                 "plan_name": "Broadcast Master Suite",
                 "status": "active",
                 "masters_count": 428,
@@ -237,13 +374,14 @@ def _seed_if_empty(db: Database) -> None:
         db.features.insert_many([
             {
                 "id": "general_bass",
-                "title": "General + Bass",
+                "title": "Studio Clarity",
                 "category": "Podcast Filter",
-                "description": "Clean studio voice with warm, speaking-driven bass",
-                "dsp_params": "bass: 0.55 · treble: 0.25 · warmth: 0.12",
-                "bass": 0.55,
-                "treble": 0.25,
-                "warmth": 0.12,
+                "description": "Pristine broadcast mic clarity, zero mud, pitch-tuned body",
+                "dsp_params": "pitch_body: 0.35 · treble: 0.35 · broadcast EQ",
+                "bass": 0.0,
+                "pitch_body": 0.35,
+                "treble": 0.35,
+                "warmth": 0.05,
                 "space": "",
                 "enabled": True,
                 "pro_only": False,
@@ -251,9 +389,9 @@ def _seed_if_empty(db: Database) -> None:
             },
             {
                 "id": "theatrical",
-                "title": "Theatrical",
+                "title": "Theatrical + Bass",
                 "category": "Podcast Filter",
-                "description": "Voice-tuned bass, cinema-hall stereo depth",
+                "description": "Movie-trailer bass that follows your voice, cinema-hall depth",
                 "dsp_params": "bass: 0.85 · treble: 0.20 · space: theatre (1.65s)",
                 "bass": 0.85,
                 "treble": 0.20,
@@ -265,13 +403,14 @@ def _seed_if_empty(db: Database) -> None:
             },
             {
                 "id": "bass_treble",
-                "title": "Bass + Treble",
+                "title": "Crisp Air & Detail",
                 "category": "Podcast Filter",
-                "description": "Punchy dynamic bass paired with crisp HD treble",
-                "dsp_params": "bass: 0.70 · treble: 0.85 · V-curve EQ",
-                "bass": 0.70,
-                "treble": 0.85,
-                "warmth": 0.15,
+                "description": "Modern high-definition shimmer with crisp consonant detail",
+                "dsp_params": "pitch_body: 0.25 · treble: 0.80 · shimmer",
+                "bass": 0.0,
+                "pitch_body": 0.25,
+                "treble": 0.80,
+                "warmth": 0.0,
                 "space": "",
                 "enabled": True,
                 "pro_only": True,
@@ -279,13 +418,14 @@ def _seed_if_empty(db: Database) -> None:
             },
             {
                 "id": "ultra_bass",
-                "title": "Ultra Bass",
+                "title": "Warm Intimate",
                 "category": "Podcast Filter",
-                "description": "Deepest sub-octave chest resonance, dark and heavy",
-                "dsp_params": "bass: 1.15 · +9.5 dB @ 75 Hz · warmth: 0.28",
-                "bass": 1.15,
-                "treble": 0.0,
-                "warmth": 0.28,
+                "description": "Velvet tube warmth, smooth presence, close-mic intimacy",
+                "dsp_params": "pitch_body: 0.45 · warmth: 0.35 · proximity",
+                "bass": 0.0,
+                "pitch_body": 0.45,
+                "treble": 0.10,
+                "warmth": 0.35,
                 "space": "",
                 "enabled": True,
                 "pro_only": True,
@@ -293,31 +433,33 @@ def _seed_if_empty(db: Database) -> None:
             },
             {
                 "id": "crystal_treble",
-                "title": "Crystal Treble",
+                "title": "Crystal Presence",
                 "category": "Podcast Filter",
-                "description": "Ultra-crisp treble, articulation and condenser air",
-                "dsp_params": "treble: 1.0 · +9.0 dB @ 12.5 kHz · low-cut",
+                "description": "Ultra-crisp treble articulation and studio condenser air",
+                "dsp_params": "pitch_body: 0.15 · treble: 0.95 · articulation",
                 "bass": 0.0,
-                "treble": 1.0,
+                "pitch_body": 0.15,
+                "treble": 0.95,
                 "warmth": 0.0,
                 "space": "",
                 "enabled": True,
                 "pro_only": True,
-                "usage_count": 9640,
+                "usage_count": 8940,
             },
             {
                 "id": "studio_booth",
                 "title": "Studio Booth",
                 "category": "Podcast Filter",
-                "description": "Wide stereo acoustic booth with warm bass & treble",
-                "dsp_params": "bass: 0.50 · treble: 0.55 · space: booth (0.42s)",
-                "bass": 0.50,
-                "treble": 0.55,
-                "warmth": 0.25,
+                "description": "Acoustically treated studio room with wide stereo depth",
+                "dsp_params": "pitch_body: 0.30 · treble: 0.45 · space: booth",
+                "bass": 0.0,
+                "pitch_body": 0.30,
+                "treble": 0.45,
+                "warmth": 0.15,
                 "space": "booth",
                 "enabled": True,
                 "pro_only": True,
-                "usage_count": 12850,
+                "usage_count": 13420,
             },
             {
                 "id": "feat_zero_gate",
@@ -360,6 +502,7 @@ def _seed_if_empty(db: Database) -> None:
                 "billing_cycle": "Yearly",
                 "timestamp": "Today · 12:42 PM",
                 "method": "Apple Pay",
+                "receipt_id": "rcpt_seed_9921",
                 "created_at": time.time() - 3600,
             },
             {
@@ -371,6 +514,7 @@ def _seed_if_empty(db: Database) -> None:
                 "billing_cycle": "Yearly",
                 "timestamp": "Today · 11:18 AM",
                 "method": "Google Play",
+                "receipt_id": "rcpt_seed_9920",
                 "created_at": time.time() - 7200,
             },
             {
@@ -382,6 +526,7 @@ def _seed_if_empty(db: Database) -> None:
                 "billing_cycle": "Monthly",
                 "timestamp": "Yesterday · 08:15 PM",
                 "method": "Stripe Card •••• 4242",
+                "receipt_id": "rcpt_seed_9919",
                 "created_at": time.time() - 86400,
             },
             {
@@ -393,6 +538,7 @@ def _seed_if_empty(db: Database) -> None:
                 "billing_cycle": "Yearly",
                 "timestamp": "Oct 18 · 04:30 PM",
                 "method": "Google Play",
+                "receipt_id": "rcpt_seed_9918",
                 "created_at": time.time() - 86400 * 2,
             },
             {
@@ -404,6 +550,7 @@ def _seed_if_empty(db: Database) -> None:
                 "billing_cycle": "Yearly",
                 "timestamp": "Oct 17 · 02:12 PM",
                 "method": "Stripe Card •••• 8819",
+                "receipt_id": "rcpt_seed_9917",
                 "created_at": time.time() - 86400 * 3,
             },
         ])
@@ -426,14 +573,78 @@ def _seed_if_empty(db: Database) -> None:
         })
 
 
-def _sync_dynamic_presets(db: Database) -> None:
-    """Register any custom Podcast filters created by Admin in MongoDB into PODCAST_TONES for DSP processing."""
+def _sync_dynamic_presets(db: Any) -> None:
+    """Ensure canonical Podcast filters are up-to-date in MongoDB and register any custom Admin filters."""
+    canonical_updates = {
+        "general_bass": {
+            "title": "Studio Clarity",
+            "description": "Pristine broadcast mic clarity, zero mud, pitch-tuned body",
+            "dsp_params": "pitch_body: 0.35 · treble: 0.35 · broadcast EQ",
+            "bass": 0.0,
+            "pitch_body": 0.35,
+            "treble": 0.35,
+            "warmth": 0.05,
+            "space": "",
+        },
+        "theatrical": {
+            "title": "Theatrical + Bass",
+            "description": "Movie-trailer bass that follows your voice, cinema-hall depth",
+            "dsp_params": "bass: 0.85 · treble: 0.20 · space: theatre (1.65s)",
+            "bass": 0.85,
+            "treble": 0.20,
+            "warmth": 0.18,
+            "space": "theatre",
+        },
+        "bass_treble": {
+            "title": "Crisp Air & Detail",
+            "description": "Modern high-definition shimmer with crisp consonant detail",
+            "dsp_params": "pitch_body: 0.25 · treble: 0.80 · shimmer",
+            "bass": 0.0,
+            "pitch_body": 0.25,
+            "treble": 0.80,
+            "warmth": 0.0,
+            "space": "",
+        },
+        "ultra_bass": {
+            "title": "Warm Intimate",
+            "description": "Velvet tube warmth, smooth presence, close-mic intimacy",
+            "dsp_params": "pitch_body: 0.45 · warmth: 0.35 · proximity",
+            "bass": 0.0,
+            "pitch_body": 0.45,
+            "treble": 0.10,
+            "warmth": 0.35,
+            "space": "",
+        },
+        "crystal_treble": {
+            "title": "Crystal Presence",
+            "description": "Ultra-crisp treble articulation and studio condenser air",
+            "dsp_params": "pitch_body: 0.15 · treble: 0.95 · articulation",
+            "bass": 0.0,
+            "pitch_body": 0.15,
+            "treble": 0.95,
+            "warmth": 0.0,
+            "space": "",
+        },
+        "studio_booth": {
+            "title": "Studio Booth",
+            "description": "Acoustically treated studio room with wide stereo depth",
+            "dsp_params": "pitch_body: 0.30 · treble: 0.45 · space: booth",
+            "bass": 0.0,
+            "pitch_body": 0.30,
+            "treble": 0.45,
+            "warmth": 0.15,
+            "space": "booth",
+        },
+    }
+    for fid, fields in canonical_updates.items():
+        db.features.update_one({"id": fid}, {"$set": fields})
+
     for doc in db.features.find({"category": "Podcast Filter"}):
         fid = doc["id"]
         if fid not in PODCAST_TONES:
-            bass = float(doc.get("bass", 0.5))
-            treble = float(doc.get("treble", 0.4))
-            warmth = float(doc.get("warmth", 0.15))
+            bass = float(doc.get("bass", 0.0))
+            treble = float(doc.get("treble", 0.35))
+            warmth = float(doc.get("warmth", 0.10))
             space = str(doc.get("space", ""))
             PODCAST_TONES[fid] = {
                 "label": doc["title"],
@@ -445,8 +656,8 @@ def _sync_dynamic_presets(db: Database) -> None:
                     (320, -3.5),
                     (1000, 0.5),
                     (3200, 4.0 * max(0.3, treble)),
-                    (6500, 5.0 * treble),
-                    (12000, 6.0 * treble),
+                    (6500, 2.0 * treble),
+                    (12000, -3.0),
                 ],
                 "bass": bass,
                 "treble": treble,
@@ -463,6 +674,32 @@ def strip_oid(doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     out.pop("_id", None)
     out.pop("password_hash", None)
     return out
+
+
+def compute_authoritative_plan_price(db: Any, plan_id: Optional[str], plan_name: Optional[str], billing_cycle: str) -> Dict[str, Any]:
+    """Look up the subscription plan in MongoDB and return the authoritative server-side price."""
+    plan = None
+    if plan_id:
+        plan = db.plans.find_one({"id": plan_id})
+    if not plan and plan_name:
+        plan = db.plans.find_one({"name": plan_name})
+    if not plan:
+        raise ValueError("Requested subscription plan does not exist")
+    if not plan.get("enabled", True):
+        raise ValueError("Requested subscription plan is not currently available")
+
+    monthly = float(plan.get("monthly_price", 0.0))
+    yearly = float(plan.get("yearly_price", 0.0))
+    if billing_cycle == "Yearly":
+        unit = yearly if yearly > 0 else monthly
+        amount = round(unit * 12.0, 2)
+    else:
+        amount = round(monthly, 2)
+    return {
+        "plan": strip_oid(plan),
+        "plan_name": str(plan["name"]),
+        "amount_usd": amount,
+    }
 
 
 def list_all_state() -> Dict[str, Any]:
@@ -521,9 +758,10 @@ def record_audio_job(user_email: Optional[str], mode: str, eq: str, duration_sec
     # Increment feature usage counter in MongoDB
     db.features.update_one({"id": eq}, {"$inc": {"usage_count": 1}})
 
-    # Update user profile in MongoDB
-    target_query = {"email": user_email.lower().strip()} if user_email else {"status": "active"}
-    user = db.users.find_one(target_query)
+    # Update user profile in MongoDB only if user_email is explicitly known
+    if not user_email:
+        return
+    user = db.users.find_one({"email": user_email.lower().strip()})
     if user:
         jobs: List[str] = list(user.get("recent_jobs", []))
         jobs.insert(0, summary)

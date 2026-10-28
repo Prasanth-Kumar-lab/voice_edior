@@ -1,8 +1,20 @@
+import 'package:flutter/material.dart';
+
 /// Pick-and-go filters for Podcast. Ids match the Python service and the Kotlin engine.
 class PodcastTone {
-  const PodcastTone(this.id, this.label, this.blurb, {this.proOnly = false});
+  const PodcastTone(
+    this.id,
+    this.label,
+    this.blurb, {
+    this.proOnly = false,
+    this.tag = 'Studio',
+    this.icon = Icons.graphic_eq_rounded,
+  });
+
   final String id, label, blurb;
   final bool proOnly;
+  final String tag;
+  final IconData icon;
 
   @override
   bool operator ==(Object other) => other is PodcastTone && other.id == id;
@@ -12,38 +24,50 @@ class PodcastTone {
 
   static const generalBass = PodcastTone(
     'general_bass',
-    'General + Bass',
-    'Clean studio voice with warm, speaking-driven bass',
+    'Studio Clarity',
+    'Neutral broadcast-mic clarity · zero bass, zero mud · every word articulate',
+    tag: 'Broadcast Standard',
+    icon: Icons.mic_rounded,
   );
   static const theatrical = PodcastTone(
     'theatrical',
-    'Theatrical',
-    'Voice-tuned bass, cinema-hall stereo depth',
+    'Theatrical + Bass',
+    'Movie-trailer bass that follows your voice · immersive cinema-hall depth',
     proOnly: true,
+    tag: 'Cinema Sub-Bass',
+    icon: Icons.movie_filter_rounded,
   );
   static const bassTreble = PodcastTone(
     'bass_treble',
-    'Bass + Treble',
-    'Punchy dynamic bass paired with crisp HD treble',
+    'Crisp Air & Detail',
+    'Modern HD creator sound · open sparkling air · silky consonants',
     proOnly: true,
+    tag: 'Modern HD Air',
+    icon: Icons.air_rounded,
   );
   static const ultraBass = PodcastTone(
     'ultra_bass',
-    'Ultra Bass',
-    'Deepest sub-octave chest resonance, dark and heavy',
+    'Warm Intimate',
+    'Late-night radio · analog tube warmth · smooth, close and velvety',
     proOnly: true,
+    tag: 'Analog Tube',
+    icon: Icons.radio_rounded,
   );
   static const crystalTreble = PodcastTone(
     'crystal_treble',
-    'Crystal Treble',
-    'Ultra-crisp treble, articulation and condenser air',
+    'Crystal Presence',
+    'Maximum intelligibility · forward projection · cuts through phone speakers',
     proOnly: true,
+    tag: 'Max Articulation',
+    icon: Icons.record_voice_over_rounded,
   );
   static const studioBooth = PodcastTone(
     'studio_booth',
     'Studio Booth',
-    'Wide stereo acoustic booth with warm bass & treble',
+    'Treated vocal booth · balanced voice · short wide stereo reflections',
     proOnly: true,
+    tag: 'Treated Space',
+    icon: Icons.surround_sound_rounded,
   );
 
   static const List<PodcastTone> all = [

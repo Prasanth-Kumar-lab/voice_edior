@@ -25,11 +25,13 @@ class NativeEnhance {
     required this.floorOut,
     required this.f0,
     required this.voiceType,
+    this.stereo = false,
   });
   final String path;
   final int durationMs;
   final double lufsIn, lufsOut, floorIn, floorOut, f0;
   final String voiceType;
+  final bool stereo;
 }
 
 /// Recording + on-device enhancement. Android uses the native Kotlin engine (48 kHz, live meters,
@@ -160,10 +162,24 @@ class NativeEngine extends GetxService {
 
   // ── on-device premium pass ──────────────────────────────────────────────────
 
-  Future<NativeEnhance> enhance(String input, EnhanceMode mode, {String tone = 'natural', String space = 'dry', String level = 'enhanced'}) async {
+  Future<NativeEnhance> enhance(
+    String input,
+    EnhanceMode mode, {
+    String tone = 'natural',
+    String space = 'dry',
+    String level = 'enhanced',
+    double strength = 1.0,
+  }) async {
     enhanceStage.value = 'Starting';
     enhanceProgress.value = 0;
-    final Map<dynamic, dynamic>? r = await _m.invokeMapMethod('enhance', {'input': input, 'mode': mode.id, 'tone': tone, 'space': space, 'level': level});
+    final Map<dynamic, dynamic>? r = await _m.invokeMapMethod('enhance', {
+      'input': input,
+      'mode': mode.id,
+      'tone': tone,
+      'space': space,
+      'level': level,
+      'strength': strength,
+    });
     return NativeEnhance(
       path: r!['filePath'] as String,
       durationMs: (r['durationMs'] as num).toInt(),
@@ -173,6 +189,7 @@ class NativeEngine extends GetxService {
       floorOut: (r['floorOutDb'] as num).toDouble(),
       f0: (r['f0'] as num).toDouble(),
       voiceType: r['voiceType'] as String,
+      stereo: (r['stereo'] as bool?) ?? false,
     );
   }
 

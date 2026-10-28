@@ -7,6 +7,7 @@ import '../theme/app_colors.dart';
 import '../theme/app_radius.dart';
 import '../theme/app_shadows.dart';
 import '../theme/app_spacing.dart';
+import '../utils/app_localization.dart';
 import '../widgets/common/vp_buttons.dart';
 import 'login_view.dart';
 
@@ -22,7 +23,7 @@ class _ProfileViewState extends State<ProfileView> {
   bool _zeroPauseGate = true;
   bool _autoNormalizeLufs = true;
   bool _wav24BitExport = true;
-  String _defaultFilter = 'General + Bass';
+  String _defaultFilter = 'Studio Clarity';
 
   static String _initials(String name) {
     final parts = name.trim().split(' ');
@@ -268,6 +269,85 @@ class _ProfileViewState extends State<ProfileView> {
               ),
 
               const SizedBox(height: AppSpacing.lg),
+              Obx(() {
+                final AppPreferencesController prefs =
+                    Get.find<AppPreferencesController>();
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(prefs.trKey('appearance_language'), style: t.titleMedium),
+                    const SizedBox(height: AppSpacing.sm),
+                    VpCard(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.md,
+                        vertical: AppSpacing.xs,
+                      ),
+                      child: Column(
+                        children: [
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(prefs.trKey('theme_mode'), style: t.labelLarge),
+                            trailing: SegmentedButton<ThemeMode>(
+                              segments: const [
+                                ButtonSegment(
+                                  value: ThemeMode.dark,
+                                  label: Text('Dark', style: TextStyle(fontSize: 11)),
+                                ),
+                                ButtonSegment(
+                                  value: ThemeMode.light,
+                                  label: Text('Light', style: TextStyle(fontSize: 11)),
+                                ),
+                                ButtonSegment(
+                                  value: ThemeMode.system,
+                                  label: Text('Auto', style: TextStyle(fontSize: 11)),
+                                ),
+                              ],
+                              selected: {prefs.themeMode.value},
+                              onSelectionChanged: (s) => prefs.setThemeMode(s.first),
+                            ),
+                          ),
+                          Divider(color: AppColors.border(b), height: 1),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(prefs.trKey('language'), style: t.labelLarge),
+                            trailing: DropdownButton<String>(
+                              value: prefs.languageCode.value,
+                              underline: const SizedBox.shrink(),
+                              dropdownColor: AppColors.surfaceAlt(b),
+                              items: const [
+                                DropdownMenuItem(value: 'en', child: Text('English')),
+                                DropdownMenuItem(value: 'hi', child: Text('हिन्दी (Hindi)')),
+                                DropdownMenuItem(value: 'te', child: Text('తెలుగు (Telugu)')),
+                              ],
+                              onChanged: (v) {
+                                if (v != null) prefs.setLanguage(v);
+                              },
+                            ),
+                          ),
+                          Divider(color: AppColors.border(b), height: 1),
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(
+                              Icons.verified_user_outlined,
+                              color: AppColors.accentBright,
+                              size: 20,
+                            ),
+                            title: Text(prefs.trKey('privacy_terms'), style: t.labelLarge),
+                            subtitle: Text(
+                              'Google Play Data Safety, Terms of Service & Account Deletion',
+                              style: t.bodySmall?.copyWith(color: AppColors.muted(b)),
+                            ),
+                            trailing: const Icon(Icons.chevron_right_rounded, size: 18),
+                            onTap: () => _showPrivacyAndAccountDeletionDialog(context, prefs),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              }),
+
+              const SizedBox(height: AppSpacing.lg),
               Text('Recent Studio Masters (MongoDB Live)', style: t.titleMedium),
               const SizedBox(height: AppSpacing.sm),
               Obx(() {
@@ -323,6 +403,51 @@ class _ProfileViewState extends State<ProfileView> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  void _showPrivacyAndAccountDeletionDialog(
+    BuildContext context,
+    AppPreferencesController prefs,
+  ) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(prefs.trKey('privacy_terms')),
+        content: const SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '1. Audio Privacy & Ephemeral Processing\n'
+                'Uploaded takes are processed in isolated memory and automatically purged after enhancement. On-device mixes stay strictly on your phone unless you explicitly share them.\n\n'
+                '2. Google Play Data Safety\n'
+                'VocalPolish collects only your account email and subscription tier for Studio AI Pro entitlement sync. Passwords are protected with per-user salted scrypt hashes.\n\n'
+                '3. Account & Cloud Data Deletion\n'
+                'You can permanently delete your account and all cloud history at any time below.',
+                style: TextStyle(fontSize: 12.5, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              Get.offAll(() => const LoginView(), transition: Transition.fadeIn);
+            },
+            child: Text(
+              prefs.trKey('delete_account'),
+              style: const TextStyle(color: AppColors.danger),
+            ),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
