@@ -108,17 +108,17 @@ object Enhancer {
             applyTheatricalBass(shaped, sr, info.f0Median)
         }
 
-        // Stage 3: Final clean gate after leveling/compression so pauses drop to studio black
+        // Stage 3: Final clean gate after leveling/compression so pauses & close-to-vocal tails drop to studio black
         progress("Final clean", 0.75f)
-        val gateDb = gateThresholdDb(shaped, sr, if (vocals) 8.5 else 9.5)
+        val gateDb = gateThresholdDb(shaped, sr, if (vocals) 11.0 else 12.5)
         var y = process(
             shaped,
             sr,
             flat.copy(
                 gateOn = true,
                 gateThresholdDb = gateDb,
-                gateDepthDb = 58f,
-                gateReleaseMs = if (vocals) 75f else 55f,
+                gateDepthDb = 60f,
+                gateReleaseMs = if (vocals) 55f else 42f,
             ),
         )
 

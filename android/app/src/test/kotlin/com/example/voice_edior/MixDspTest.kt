@@ -153,4 +153,57 @@ class MixDspTest {
         assertTrue("Podcast vocal must remain strong and clean", outPodcastVoiceRms > 0.10)
         assertTrue("Vocals vocal must remain strong and clean", outVocalsVoiceRms > 0.10)
     }
+
+    @Test
+    fun vocalIsolatorRemovesPassingBikeAndCloseToVocalNoise() {
+        val sr = 48000
+        val n = sr * 2 // 2.0 seconds
+        val rng = Random(99L)
+        val f0 = 155.0
+
+        // Simulate a loud passing motorcycle/bike (0.15s..0.55s in pause, and continuing right up to and during speech 0.65s..1.35s, plus close trailing noise 1.35s..1.55s)
+        val input = FloatArray(n) { i ->
+            val t = i.toDouble() / sr
+            val bikeEnv = when {
+                t in 0.10..0.58 -> sin(PI * (t - 0.10) / 0.48) // Loud bike pass-by in background pause
+                t in 0.60..1.65 -> 0.65 // Bike + close noise right next to and underneath vocal
+                else -> 0.15
+            }
+            val bikeEngine = bikeEnv * (
+                0.18 * sin(2.0 * PI * (62.0 + 18.0 * t) * t) +
+                    0.12 * sin(2.0 * PI * (124.0 + 36.0 * t) * t) +
+                    0.14 * (rng.nextDouble() * 2.0 - 1.0)
+                )
+            val vocal = if (t in 0.68..1.32) {
+                var v = 0.0
+                for (h in 1..10) {
+                    v += (0.36 / h) * sin(2.0 * PI * (h * f0) * t)
+                }
+                v
+            } else {
+                0.0
+            }
+            (vocal + bikeEngine).toFloat()
+        }
+
+        val cleaned = VocalIsolator.isolate(input, sr, f0.toFloat(), vocalsMode = false)
+
+        fun rmsSec(x: FloatArray, t0: Double, t1: Double): Double {
+            val s0 = (t0 * sr).toInt().coerceIn(0, x.size - 1)
+            val s1 = (t1 * sr).toInt().coerceIn(s0 + 1, x.size)
+            var sum = 0.0
+            for (i in s0 until s1) sum += x[i].toDouble() * x[i].toDouble()
+            return sqrt(sum / (s1 - s0))
+        }
+
+        val bikeInRms = rmsSec(input, 0.20, 0.50)
+        val bikeOutRms = rmsSec(cleaned, 0.20, 0.50)
+        val closeTailInRms = rmsSec(input, 1.38, 1.60) // 60 ms after speech ends
+        val closeTailOutRms = rmsSec(cleaned, 1.38, 1.60)
+        val vocalOutRms = rmsSec(cleaned, 0.75, 1.25)
+
+        assertTrue("Loud passing bike must be suppressed by >90% ($bikeInRms -> $bikeOutRms)", bikeOutRms < bikeInRms * 0.10)
+        assertTrue("Close-to-vocal noise immediately after speech must be suppressed by >85% ($closeTailInRms -> $closeTailOutRms)", closeTailOutRms < closeTailInRms * 0.15)
+        assertTrue("Clean vocal must remain strong and intact ($vocalOutRms)", vocalOutRms > 0.12)
+    }
 }

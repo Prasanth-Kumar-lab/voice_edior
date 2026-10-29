@@ -120,8 +120,8 @@ class VocalChain(private val sr: Int) {
         val gateThr = dbToLin(f.gateThresholdDb.toDouble())
         val gateAtk = timeCoef(2.0, sr)
         val gateRel = timeCoef(f.gateReleaseMs.toDouble().coerceIn(20.0, 600.0), sr)
-        val envCoef = timeCoef(12.0, sr)
-        val gateHoldN = (0.08 * sr).toInt()
+        val envCoef = timeCoef(10.0, sr)
+        val gateHoldN = (0.035 * sr).toInt()
         val gateFloor = dbToLin(-f.gateDepthDb.toDouble().coerceIn(6.0, 60.0))
 
         val sibAmt = f.deEss.toDouble().coerceIn(0.0, 1.0)

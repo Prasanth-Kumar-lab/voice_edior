@@ -72,7 +72,7 @@ class AudioConvert {
           (previewSeconds != null && previewSeconds > 0) ? '-t ${previewSeconds.toStringAsFixed(1)} ' : '';
       final int lpHz = vocalsMode ? 13000 : 11500;
       final session = await FFmpegKit.execute(
-        '-y $durArg-i "${inputWav.replaceAll('\\', '/')}" -af "highpass=f=80:poles=2,afftdn=nf=-25:nr=35:nt=w:tn=1,lowpass=f=$lpHz:poles=2" -vn -ac 1 -ar 48000 -c:a pcm_s16le "$out"',
+        '-y $durArg-i "${inputWav.replaceAll('\\', '/')}" -af "highpass=f=85:poles=2,adeclick=w=55:o=75:t=2.2,afftdn=nf=-25:nr=38:nt=w:tn=1:om=o,afftdn=nf=-32:nr=24:nt=v:tn=1,lowpass=f=$lpHz:poles=2" -vn -ac 1 -ar 48000 -c:a pcm_s16le "$out"',
       );
       final rc = await session.getReturnCode();
       if (ReturnCode.isSuccess(rc) && File(out).existsSync() && File(out).lengthSync() > 100) {

@@ -512,15 +512,15 @@ def podcast_space(x: np.ndarray, space_type: str, sr: int = 48000) -> np.ndarray
     return x
 
 
-def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -60.0,
-                      hold_ms: float = 120.0, look_ms: float = 15.0) -> np.ndarray:
-    """Zero-noise pause gate: completely drops background noise to studio black when speech stops.
+def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -65.0,
+                      hold_ms: float = 42.0, look_ms: float = 12.0) -> np.ndarray:
+    """Zero-noise pause gate: completely drops background noise & close-to-vocal tails to studio black.
 
     Uses an adaptive energy threshold with lookahead so word onsets (consonants) are never clipped,
-    and a smooth hold/release hangover for natural transitions.
+    and a tight hold/release hangover so noise immediately adjacent to speech is silenced.
     """
     hop = int(0.003 * sr)
-    win = int(0.025 * sr)
+    win = int(0.020 * sr)
     n = len(x)
     if n < win * 2:
         return x
@@ -529,10 +529,10 @@ def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -6
     frame_rms = np.sqrt((frames.astype(np.float64) ** 2).mean(axis=1) + 1e-12)
     frame_db = 20 * np.log10(frame_rms)
 
-    p10 = float(np.percentile(frame_db, 10))
+    p15 = float(np.percentile(frame_db, 15))
     p85 = float(np.percentile(frame_db, 85))
-    dyn = max(6.0, p85 - p10)
-    speech_thr = p10 + max(2.5, 0.20 * dyn)
+    dyn = max(8.0, p85 - p15)
+    speech_thr = max(p15 + 5.5, p85 - min(18.0, 0.65 * dyn))
     raw_active = frame_db > speech_thr
 
     hold_count = max(1, int(hold_ms * 1e-3 * sr / hop))
@@ -549,8 +549,8 @@ def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -6
     if look_count < len(env):
         env = np.concatenate([env[look_count:], np.full(look_count, env[-1])])
 
-    a_in = np.exp(-1.0 / max(1.0, 0.004 * sr / hop))
-    a_out = np.exp(-1.0 / max(1.0, 0.08 * sr / hop))
+    a_in = np.exp(-1.0 / max(1.0, 0.003 * sr / hop))
+    a_out = np.exp(-1.0 / max(1.0, 0.032 * sr / hop))
     cur = 0.0
     smooth_env = np.zeros_like(env)
     for i in range(len(env)):
