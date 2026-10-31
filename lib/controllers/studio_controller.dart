@@ -81,6 +81,37 @@ class StudioController extends GetxController {
   final trimEnd = 1.0.obs;          // 0.0 .. 1.0 fraction
   final customFx = const VocalFx().obs; // Manual Audacity sliders & EQ
 
+  // Per-filter custom bass adjustments (dB offset from preset baseline, -6.0 dB to +8.0 dB)
+  final filterBass = <String, double>{}.obs;
+
+  String get currentFilterId =>
+      mode.value == EnhanceMode.vocals ? tone.value.id : podTone.value.id;
+
+  double bassFor(String filterId) => filterBass[filterId] ?? 0.0;
+
+  double get currentFilterBass => bassFor(currentFilterId);
+
+  void setFilterBass(double db) {
+    final String id = currentFilterId;
+    final double clamped = double.parse(db.clamp(-6.0, 8.0).toStringAsFixed(1));
+    if ((filterBass[id] ?? 0.0) == clamped) return;
+    filterBass[id] = clamped;
+    _rerenderSoon();
+  }
+
+  void resetFilterBass([String? filterId]) {
+    final String id = filterId ?? currentFilterId;
+    if ((filterBass[id] ?? 0.0) == 0.0) return;
+    filterBass[id] = 0.0;
+    _rerenderSoon();
+  }
+
+  void resetAllFilterBass() {
+    if (filterBass.isEmpty) return;
+    filterBass.clear();
+    _rerenderSoon();
+  }
+
   final playing = false.obs;
   final listenOriginal = false.obs;
   final positionMs = 0.obs;
@@ -286,6 +317,7 @@ class StudioController extends GetxController {
     final String t = vocals ? tone.value.id : podTone.value.id;
     final String s = vocals ? space.value.id : 'dry';
     final String lv = level.value.id;
+    final double customBass = currentFilterBass;
     String note0 = '';
 
     final AdminController? adm =
@@ -302,6 +334,7 @@ class StudioController extends GetxController {
           space: s,
           level: lv,
           strength: strength.value,
+          customBass: customBass,
           customFx: isAudacityMode.value ? customFx.value.toMap() : null,
         );
         if (!allowCachedRestyle && adm != null) unawaited(adm.syncFromMongo());
@@ -334,6 +367,7 @@ class StudioController extends GetxController {
             space: s,
             level: lv,
             strength: strength.value,
+            bass: customBass,
           );
           if (cached != null) {
             return _Computed(cached.path, _fromServer(cached.report, s != 'dry'), note0);
@@ -347,6 +381,7 @@ class StudioController extends GetxController {
           space: s,
           level: lv,
           strength: strength.value,
+          customBass: customBass,
           voiceIsolation: voiceIsolation.value,
           previewSeconds: preview10s.value ? 10.0 : null,
           userEmail: email,

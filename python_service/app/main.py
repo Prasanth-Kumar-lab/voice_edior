@@ -647,6 +647,7 @@ async def enhance_audio(
     space: str = Form("dry"),
     level: str = Form("enhanced"),
     strength: float = Form(1.0),
+    bass: float = Form(0.0),
     voice_isolation: bool = Form(False),
     preview_seconds: Optional[float] = Form(None),
     user_email: Optional[str] = Form(None),
@@ -686,6 +687,7 @@ async def enhance_audio(
         level,
         user_email=effective_email,
         strength=float(strength),
+        bass=float(bass),
         voice_isolation=bool(voice_isolation),
         preview_seconds=preview_seconds,
     )
@@ -704,6 +706,7 @@ def restyle_job(
         space=payload.get("space"),
         level=payload.get("level"),
         strength=payload.get("strength"),
+        bass=float(payload["bass"]) if "bass" in payload else None,
     )
     if job is None:
         raise HTTPException(status_code=404, detail="Job clean cache not found or expired")

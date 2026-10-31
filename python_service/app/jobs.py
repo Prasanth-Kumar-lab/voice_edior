@@ -21,6 +21,7 @@ class Job:
     space: str = "dry"
     level: str = "enhanced"
     strength: float = 1.0
+    bass: float = 0.0
     voice_isolation: bool = False
     preview_seconds: Optional[float] = None
     user_email: Optional[str] = None
@@ -56,6 +57,7 @@ class JobStore:
         level: str = "enhanced",
         user_email: Optional[str] = None,
         strength: float = 1.0,
+        bass: float = 0.0,
         voice_isolation: bool = False,
         preview_seconds: Optional[float] = None,
     ) -> Job:
@@ -67,6 +69,7 @@ class JobStore:
             space=space,
             level=level,
             strength=strength,
+            bass=bass,
             voice_isolation=voice_isolation,
             preview_seconds=preview_seconds,
             user_email=user_email,
@@ -123,6 +126,7 @@ class JobStore:
         space: Optional[str] = None,
         level: Optional[str] = None,
         strength: Optional[float] = None,
+        bass: Optional[float] = None,
     ) -> Optional[Job]:
         """Re-run only Stage 2 (Style) on a completed job's cached Stage 1 (Clean) stem in <1s."""
         with self._lock:
@@ -138,6 +142,8 @@ class JobStore:
             job.level = level
         if strength is not None:
             job.strength = float(strength)
+        if bass is not None:
+            job.bass = float(bass)
 
         y, report = style_from_cache(
             job.clean_cache,
@@ -145,6 +151,7 @@ class JobStore:
             space=job.space,
             level=job.level,
             strength=job.strength,
+            bass=job.bass,
         )
         job.result = write_wav(y, 48000, bits=16)
         job.report = report
@@ -221,6 +228,7 @@ class JobStore:
                 space=job.space,
                 level=job.level,
                 strength=job.strength,
+                bass=job.bass,
             )
             report["cached_restyle"] = False
             if job.cancelled:

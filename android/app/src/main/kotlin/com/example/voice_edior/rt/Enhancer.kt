@@ -62,6 +62,7 @@ object Enhancer {
         level: String = "enhanced",
         strength: Float = 1.0f,
         customFx: VocalFx? = null,
+        customBass: Float = 0.0f,
         progress: (String, Float) -> Unit = { _, _ -> },
     ): EnhanceResult {
         val vocals = mode == "vocals"
@@ -120,7 +121,15 @@ object Enhancer {
         val sr = cache.sr
         val info = cache.info
         val pass1 = cache.pass1
-        val fx = customFx ?: (if (vocals) ModeFx.vocals(info, effTone, space) else ModeFx.podcast(effTone, level, info))
+        val fxBase = customFx ?: (if (vocals) ModeFx.vocals(info, effTone, space) else ModeFx.podcast(effTone, level, info))
+        val fx = if (customBass != 0f) {
+            val bands = fxBase.eqGains.clone()
+            bands[1] = (bands[1] + customBass).coerceIn(-12f, 16f)
+            bands[0] = (bands[0] + customBass * 0.5f).coerceIn(-12f, 12f)
+            fxBase.copy(eqGains = bands)
+        } else {
+            fxBase
+        }
 
         progress("Applying vocal filter & EQ", 0.56f)
         val chain = fx.copy(
@@ -133,7 +142,7 @@ object Enhancer {
         var shaped = process(pass1, sr, chain)
 
         // Add rich, warm chest resonance & vocal bass fundamental (90-260 Hz) so voices feel full and natural
-        val warmBodyAmt = if (customFx != null) {
+        val baseWarmth = if (customFx != null) {
             0.15f
         } else if (vocals) {
             when (effTone) {
@@ -151,6 +160,7 @@ object Enhancer {
                 else -> 0.30f
             }
         }
+        val warmBodyAmt = (baseWarmth * (1.0f + customBass * 0.12f)).coerceIn(0.05f, 0.95f)
         shaped = applyVocalWarmthBody(shaped, sr, warmBodyAmt)
 
         // Musical vocal clean pass with gentle depth so background is silenced without cutting vocal tails

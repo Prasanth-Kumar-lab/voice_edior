@@ -130,10 +130,11 @@ class RealtimeChannel(private val ctx: Context) : MethodChannel.MethodCallHandle
                         val space = call.argument<String>("space") ?: "dry"
                         val level = call.argument<String>("level") ?: "enhanced"
                         val strength = (call.argument<Double>("strength") ?: 1.0).toFloat()
+                        val customBass = (call.argument<Double>("customBass") ?: call.argument<Double>("bass") ?: 0.0).toFloat()
                         @Suppress("UNCHECKED_CAST")
                         val customFxMap = call.argument<Map<String, Any?>>("customFx")
                         val customFx = if (customFxMap != null && customFxMap.isNotEmpty()) VocalFx.fromMap(customFxMap) else null
-                        val r = Enhancer.run(inPath, out, mode, tone, space, level, strength, customFx) { stage, p ->
+                        val r = Enhancer.run(inPath, out, mode, tone, space, level, strength, customFx, customBass) { stage, p ->
                             main.post { sink?.success(mapOf("type" to "enhance", "stage" to stage, "progress" to p)) }
                         }
                         main.post {

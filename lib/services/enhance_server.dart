@@ -224,6 +224,7 @@ class EnhanceServer extends GetxService {
     required String space,
     required String level,
     required double strength,
+    double bass = 0.0,
   }) async {
     final String id = lastCompletedJobId.value;
     if (id.isEmpty) return null;
@@ -235,6 +236,7 @@ class EnhanceServer extends GetxService {
           'space': space,
           'level': level,
           'strength': strength,
+          'bass': bass,
         },
       );
       if (res.statusCode == 200 && res.data is Map) {
@@ -261,6 +263,7 @@ class EnhanceServer extends GetxService {
     String space = 'dry',
     String level = 'enhanced',
     double strength = 1.0,
+    double customBass = 0.0,
     bool voiceIsolation = false,
     double? previewSeconds,
     String? userEmail,
@@ -273,6 +276,7 @@ class EnhanceServer extends GetxService {
       'space': space,
       'level': level,
       'strength': strength,
+      'bass': customBass,
       'voice_isolation': voiceIsolation,
       if (previewSeconds != null && previewSeconds > 0)
         'preview_seconds': previewSeconds,

@@ -61,19 +61,20 @@ def _podcast_eq_points(x: np.ndarray, ch: Dict[str, float]):
     return pl.adaptive_eq_points(f, P, mud_hz=260, presence_hz=3300, air_db=1.2, strength=1.0)
 
 
-def _podcast_extra_curve(tone: str, ch: Dict[str, float]):
-    """Filter character curve + its own presence lift (+ close-mic body for Theatrical only)."""
+def _podcast_extra_curve(tone: str, ch: Dict[str, float], bass: float = 0.0):
+    """Filter character curve + its own presence lift (+ close-mic body) + user custom bass."""
     presence = ch["presence"]
     boost = [(2000, 0.0), (3500, presence), (5000, presence * 0.8), (8000, presence * 0.3), (12000, 0.0)] if presence else []
     prox = ch["prox"]
     body = [(90, 0.0), (160, prox), (260, prox * 0.6), (500, 0.0)] if prox else []
-    return podcast_tone_curve(tone) + boost + body
+    bass_curve = [(60, bass * 0.5), (140, bass), (260, bass * 0.4)] if bass != 0.0 else []
+    return podcast_tone_curve(tone) + boost + body + bass_curve
 
 
 def enhance_podcast(x_in: np.ndarray, sr: int, cb: Progress = _noop, tone: str = "general_bass",
-                    level: str = "enhanced") -> Tuple[np.ndarray, Dict[str, object]]:
+                    level: str = "enhanced", bass: float = 0.0) -> Tuple[np.ndarray, Dict[str, object]]:
     ch = podcast_chain_cfg(tone, level=level)
-    report: Dict[str, object] = {"mode": "podcast", "tone": tone, "level": level}
+    report: Dict[str, object] = {"mode": "podcast", "tone": tone, "level": level, "custom_bass_db": round(bass, 1)}
     cb("Analyzing recording", 0.04)
     x = _prep(x_in, sr)
     report["noise_floor_in_db"] = round(pl.noise_floor_db(x), 1)
@@ -99,13 +100,13 @@ def enhance_podcast(x_in: np.ndarray, sr: int, cb: Progress = _noop, tone: str =
         report["pitch_hpf_hz"] = round(hpf, 1)
 
     cb("Studio voice EQ", 0.62)
-    x = pl.apply_curve(x, _podcast_eq_points(x, ch), SR, extra=_podcast_extra_curve(tone, ch))
+    x = pl.apply_curve(x, _podcast_eq_points(x, ch), SR, extra=_podcast_extra_curve(tone, ch, bass=bass))
 
-    bass = float(tcfg.get("bass", 0.0)) if tcfg.get("theatre") else 0.0
-    if bass > 0:
-        cb("Adding theatrical cinema bass", 0.68)
-        x = pl.voice_bass(x, report["f0_median_hz"], SR, amount=bass)
-        report["bass"] = bass
+    bass_amt = float(tcfg.get("bass", 0.0)) + max(0.0, bass * 0.12)
+    if bass_amt > 0:
+        cb("Adding warm cinema bass", 0.68)
+        x = pl.voice_bass(x, report["f0_median_hz"], SR, amount=bass_amt)
+        report["bass"] = bass_amt
 
     treble = float(tcfg.get("treble", 0.0))
     if level == "natural":
@@ -170,8 +171,8 @@ def vocal_profile(a: Dict[str, object]) -> Dict[str, float]:
 
 
 def enhance_vocals(x_in: np.ndarray, sr: int, cb: Progress = _noop, eq: str = "natural",
-                   space: str = "dry") -> Tuple[np.ndarray, Dict[str, object]]:
-    report: Dict[str, object] = {"mode": "vocals", "tone": eq, "space": space}
+                   space: str = "dry", bass: float = 0.0) -> Tuple[np.ndarray, Dict[str, object]]:
+    report: Dict[str, object] = {"mode": "vocals", "tone": eq, "space": space, "custom_bass_db": round(bass, 1)}
     cb("Analyzing pitch", 0.04)
     x = _prep(x_in, sr)
     report["noise_floor_in_db"] = round(pl.noise_floor_db(x), 1)
@@ -196,8 +197,12 @@ def enhance_vocals(x_in: np.ndarray, sr: int, cb: Progress = _noop, eq: str = "n
     cb("Shaping the voice", 0.56)
     act = voiced if len(voiced) else None
     f, P = pl.long_term_spectrum(x, SR, act if act is not None else np.ones(1, bool))
+    bass_curve = [(60, bass * 0.5), (140, bass), (260, bass * 0.4)] if bass != 0.0 else []
+    extra_curve = tone_curve(eq) + bass_curve
     x = pl.apply_curve(x, pl.adaptive_eq_points(f, P, mud_hz=prof["mud_hz"], presence_hz=prof["presence_hz"],
-                                                air_db=prof["air_db"], strength=1.0), SR, extra=tone_curve(eq))
+                                                air_db=prof["air_db"], strength=1.0), SR, extra=extra_curve)
+    if bass > 0.0:
+        x = pl.voice_bass(x, float(report["f0_median_hz"]), SR, amount=bass * 0.12)
 
     cb("De-essing", 0.68)
     x, sib = pl.deess(x, SR, center=prof["deess_hz"], amount=0.75)
@@ -244,11 +249,12 @@ def enhance(
     level: str = "enhanced",
     strength: float = 1.0,
     voice_isolation: bool = False,
+    bass: float = 0.0,
 ) -> Tuple[np.ndarray, Dict[str, object]]:
     dry_48 = _prep(x, sr)
 
     if mode == "vocals":
-        y, report = enhance_vocals(x, sr, cb, eq=eq, space=space)
+        y, report = enhance_vocals(x, sr, cb, eq=eq, space=space, bass=bass)
     else:
         y, report = enhance_podcast(
             x,
@@ -256,6 +262,7 @@ def enhance(
             cb,
             tone=eq if eq != "natural" else "general_bass",
             level=level,
+            bass=bass,
         )
 
     report["voice_isolation"] = bool(voice_isolation)
@@ -321,6 +328,7 @@ def style_from_cache(
     space: str = "dry",
     level: str = "enhanced",
     strength: float = 1.0,
+    bass: float = 0.0,
 ) -> Tuple[np.ndarray, Dict[str, object]]:
     """Run Stage 2 (Style: EQ, tone, compression, space, LUFS, dry/wet strength) in <1s from cached clean audio."""
     mode = str(cache.get("mode", "podcast"))
@@ -334,6 +342,7 @@ def style_from_cache(
         "tone": eq,
         "space": space,
         "level": level,
+        "custom_bass_db": round(bass, 1),
         "engine": cache.get("engine", "spectral"),
         "lufs_in": cache.get("lufs_in", -24.0),
         "noise_floor_in_db": cache.get("floor_in", -50.0),
@@ -348,14 +357,17 @@ def style_from_cache(
         prof = cache["prof"]  # type: ignore[index]
         act = voiced if len(voiced) else np.ones(1, bool)
         f, P = pl.long_term_spectrum(x_clean, SR, act)
+        bass_curve = [(60, bass * 0.5), (140, bass), (260, bass * 0.4)] if bass != 0.0 else []
         x = pl.apply_curve(
             x_clean,
             pl.adaptive_eq_points(
                 f, P, mud_hz=prof["mud_hz"], presence_hz=prof["presence_hz"], air_db=prof["air_db"], strength=1.0
             ),
             SR,
-            extra=tone_curve(eq),
+            extra=tone_curve(eq) + bass_curve,
         )
+        if bass > 0.0:
+            x = pl.voice_bass(x, float(report["f0_median_hz"]), SR, amount=bass * 0.12)
         x, _ = pl.deess(x, SR, center=prof["deess_hz"], amount=0.75)
         x = pl.level(x, SR, target_db=-21.0, max_up=7.0, max_down=6.0)
         x, gr = pl.compress(x, SR, thr_db=-24.0, ratio=2.8, attack_ms=10, release_ms=130)
@@ -373,10 +385,11 @@ def style_from_cache(
         tcfg = podcast_tone_cfg(tone)
         if ch["hpf_f0"] > 0:
             x_clean = pl.highpass(x_clean, _pitch_hpf_hz(va, ch["hpf_f0"]))  # type: ignore[arg-type]
-        x = pl.apply_curve(x_clean, _podcast_eq_points(x_clean, ch), SR, extra=_podcast_extra_curve(tone, ch))
-        bass = float(tcfg.get("bass", 0.0)) if tcfg.get("theatre") else 0.0
-        if bass > 0:
-            x = pl.voice_bass(x, float(report["f0_median_hz"]), SR, amount=bass)
+        x = pl.apply_curve(x_clean, _podcast_eq_points(x_clean, ch), SR, extra=_podcast_extra_curve(tone, ch, bass=bass))
+        bass_amt = float(tcfg.get("bass", 0.0)) + max(0.0, bass * 0.12)
+        if bass_amt > 0:
+            x = pl.voice_bass(x, float(report["f0_median_hz"]), SR, amount=bass_amt)
+            report["bass"] = bass_amt
         treble = float(tcfg.get("treble", 0.0))
         if level == "natural":
             treble = 0.0

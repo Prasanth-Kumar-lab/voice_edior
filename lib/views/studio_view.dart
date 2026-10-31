@@ -1546,14 +1546,27 @@ class _VocalPickers extends StatelessWidget {
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final VocalTone tone in VocalTone.all)
-                  _PresetChip(label: tone.label, selected: c.tone.value == tone, onTap: () => c.selectTone(tone)),
+                for (final VocalTone tone in VocalTone.all) ...[
+                  () {
+                    final double bDb = c.bassFor(tone.id);
+                    final String? bBadge = bDb != 0.0
+                        ? (bDb > 0 ? '+${bDb.toStringAsFixed(1)}dB' : '${bDb.toStringAsFixed(1)}dB')
+                        : null;
+                    return _PresetChip(
+                      label: tone.label,
+                      selected: c.tone.value == tone,
+                      badge: bBadge,
+                      onTap: () => c.selectTone(tone),
+                    );
+                  }(),
+                ],
               ],
             )),
         Obx(() => Padding(
               padding: const EdgeInsets.only(top: 6),
               child: Text(c.tone.value.blurb, style: t.bodySmall?.copyWith(color: AppColors.muted(b))),
             )),
+        _FilterBassCustomizer(c),
         const SizedBox(height: AppSpacing.md),
         _label(context, 'Space', Icons.surround_sound_rounded),
         const SizedBox(height: 8),
@@ -1595,11 +1608,13 @@ class _PresetChip extends StatelessWidget {
     required this.selected,
     required this.onTap,
     this.icon,
+    this.badge,
   });
   final String label;
   final bool selected;
   final VoidCallback onTap;
   final IconData? icon;
+  final String? badge;
 
   @override
   Widget build(BuildContext context) {
@@ -1634,7 +1649,255 @@ class _PresetChip extends StatelessWidget {
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
+            if (badge != null && badge!.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  color: selected
+                      ? Colors.white.withValues(alpha: 0.25)
+                      : AppColors.accentBright.withValues(alpha: 0.15),
+                ),
+                child: Text(
+                  badge!,
+                  style: TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w800,
+                    color: selected ? Colors.white : AppColors.accentBright,
+                  ),
+                ),
+              ),
+            ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ───────────────────────────── filter bass customizer ─────────────────────────────
+
+class _FilterBassCustomizer extends StatelessWidget {
+  const _FilterBassCustomizer(this.c);
+  final StudioController c;
+
+  @override
+  Widget build(BuildContext context) {
+    final Brightness b = Theme.of(context).brightness;
+    final TextTheme t = Theme.of(context).textTheme;
+
+    return Obx(() {
+      final double bassDb = c.currentFilterBass;
+      final bool isCustomized = bassDb != 0.0;
+      final String valString = bassDb > 0
+          ? '+${bassDb.toStringAsFixed(1)} dB'
+          : '${bassDb.toStringAsFixed(1)} dB';
+
+      return Container(
+        margin: const EdgeInsets.only(top: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          borderRadius: AppRadius.card,
+          color: AppColors.surfaceAlt(b),
+          border: Border.all(
+            color: isCustomized
+                ? AppColors.accentBright.withValues(alpha: 0.45)
+                : AppColors.border(b),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.graphic_eq_rounded,
+                  size: 16,
+                  color: AppColors.accentBright,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Bass & Warmth Depth',
+                    style: t.labelMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    borderRadius: AppRadius.chip,
+                    gradient: isCustomized ? AppColors.signature : null,
+                    color: isCustomized ? null : AppColors.surface(b),
+                    border: Border.all(
+                      color: isCustomized
+                          ? Colors.transparent
+                          : AppColors.border(b),
+                    ),
+                  ),
+                  child: Text(
+                    valString,
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                      color: isCustomized ? Colors.white : AppColors.muted(b),
+                    ),
+                  ),
+                ),
+                if (isCustomized) ...[
+                  const SizedBox(width: 6),
+                  GestureDetector(
+                    onTap: () => c.resetFilterBass(),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        borderRadius: AppRadius.chip,
+                        color: AppColors.surface(b),
+                        border: Border.all(color: AppColors.border(b)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.restart_alt_rounded, size: 12, color: AppColors.muted(b)),
+                          const SizedBox(width: 3),
+                          Text(
+                            'Reset',
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.muted(b),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 2),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 3,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+              ),
+              child: Slider(
+                value: bassDb.clamp(-6.0, 8.0),
+                min: -6.0,
+                max: 8.0,
+                divisions: 28,
+                onChanged: (val) {
+                  final double rounded = (val * 2).round() / 2.0;
+                  c.setFilterBass(rounded);
+                },
+              ),
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '-6 dB (Lean)',
+                  style: t.bodySmall?.copyWith(fontSize: 10, color: AppColors.muted(b)),
+                ),
+                Text(
+                  '0 dB (Preset)',
+                  style: t.bodySmall?.copyWith(fontSize: 10, color: AppColors.muted(b)),
+                ),
+                Text(
+                  '+8 dB (Deep)',
+                  style: t.bodySmall?.copyWith(fontSize: 10, color: AppColors.muted(b)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _BassPresetPill(
+                    label: 'Lean (-3dB)',
+                    targetDb: -3.0,
+                    active: (bassDb - (-3.0)).abs() < 0.25,
+                    onTap: () => c.setFilterBass(-3.0),
+                  ),
+                  const SizedBox(width: 6),
+                  _BassPresetPill(
+                    label: 'Default (0dB)',
+                    targetDb: 0.0,
+                    active: bassDb.abs() < 0.25,
+                    onTap: () => c.setFilterBass(0.0),
+                  ),
+                  const SizedBox(width: 6),
+                  _BassPresetPill(
+                    label: 'Warm (+2.5dB)',
+                    targetDb: 2.5,
+                    active: (bassDb - 2.5).abs() < 0.25,
+                    onTap: () => c.setFilterBass(2.5),
+                  ),
+                  const SizedBox(width: 6),
+                  _BassPresetPill(
+                    label: 'Deep (+5dB)',
+                    targetDb: 5.0,
+                    active: (bassDb - 5.0).abs() < 0.25,
+                    onTap: () => c.setFilterBass(5.0),
+                  ),
+                  const SizedBox(width: 6),
+                  _BassPresetPill(
+                    label: 'Punch (+7.5dB)',
+                    targetDb: 7.5,
+                    active: (bassDb - 7.5).abs() < 0.25,
+                    onTap: () => c.setFilterBass(7.5),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+}
+
+class _BassPresetPill extends StatelessWidget {
+  const _BassPresetPill({
+    required this.label,
+    required this.targetDb,
+    required this.active,
+    required this.onTap,
+  });
+
+  final String label;
+  final double targetDb;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Brightness b = Theme.of(context).brightness;
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(
+          borderRadius: AppRadius.chip,
+          gradient: active ? AppColors.signature : null,
+          color: active ? null : AppColors.surface(b),
+          border: Border.all(
+            color: active ? Colors.transparent : AppColors.border(b),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+            color: active ? Colors.white : AppColors.muted(b),
+          ),
         ),
       ),
     );
@@ -1691,13 +1954,21 @@ class _PodcastPickers extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final PodcastTone tone in tones)
-                _PresetChip(
-                  label: tone.label,
-                  icon: tone.icon,
-                  selected: c.podTone.value.id == tone.id,
-                  onTap: () => c.selectPodcastTone(tone),
-                ),
+              for (final PodcastTone tone in tones) ...[
+                () {
+                  final double bDb = c.bassFor(tone.id);
+                  final String? bBadge = bDb != 0.0
+                      ? (bDb > 0 ? '+${bDb.toStringAsFixed(1)}dB' : '${bDb.toStringAsFixed(1)}dB')
+                      : null;
+                  return _PresetChip(
+                    label: tone.label,
+                    icon: tone.icon,
+                    selected: c.podTone.value.id == tone.id,
+                    badge: bBadge,
+                    onTap: () => c.selectPodcastTone(tone),
+                  );
+                }(),
+              ],
             ],
           );
         }),
@@ -1745,6 +2016,7 @@ class _PodcastPickers extends StatelessWidget {
             ),
           );
         }),
+        _FilterBassCustomizer(c),
       ],
     );
     return Padding(

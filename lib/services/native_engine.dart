@@ -169,6 +169,7 @@ class NativeEngine extends GetxService {
     String space = 'dry',
     String level = 'enhanced',
     double strength = 1.0,
+    double customBass = 0.0,
     Map<String, dynamic>? customFx,
   }) async {
     enhanceStage.value = 'Starting';
@@ -180,6 +181,7 @@ class NativeEngine extends GetxService {
       'space': space,
       'level': level,
       'strength': strength,
+      'customBass': customBass,
     };
     if (customFx != null) {
       args['customFx'] = customFx;
