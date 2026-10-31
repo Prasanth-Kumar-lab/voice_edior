@@ -43,33 +43,39 @@ class _MainShellViewState extends State<MainShellView> {
         child: SafeArea(
           top: false,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                _NavPill(
-                  icon: Icons.graphic_eq_rounded,
-                  label: 'Studio',
-                  selected: _index == 0,
-                  onTap: () => _setTab(0),
-                  textTheme: t,
-                  brightness: b,
+                Flexible(
+                  child: _NavPill(
+                    icon: Icons.graphic_eq_rounded,
+                    label: 'Studio',
+                    selected: _index == 0,
+                    onTap: () => _setTab(0),
+                    textTheme: t,
+                    brightness: b,
+                  ),
                 ),
-                _NavPill(
-                  icon: Icons.workspace_premium_rounded,
-                  label: 'Pro Pass',
-                  selected: _index == 1,
-                  onTap: () => _setTab(1),
-                  textTheme: t,
-                  brightness: b,
+                Flexible(
+                  child: _NavPill(
+                    icon: Icons.workspace_premium_rounded,
+                    label: 'Pro Pass',
+                    selected: _index == 1,
+                    onTap: () => _setTab(1),
+                    textTheme: t,
+                    brightness: b,
+                  ),
                 ),
-                _NavPill(
-                  icon: Icons.person_rounded,
-                  label: 'Profile',
-                  selected: _index == 2,
-                  onTap: () => _setTab(2),
-                  textTheme: t,
-                  brightness: b,
+                Flexible(
+                  child: _NavPill(
+                    icon: Icons.person_rounded,
+                    label: 'Profile',
+                    selected: _index == 2,
+                    onTap: () => _setTab(2),
+                    textTheme: t,
+                    brightness: b,
+                  ),
                 ),
               ],
             ),
@@ -120,11 +126,15 @@ class _NavPill extends StatelessWidget {
               color: selected ? Colors.white : AppColors.muted(brightness),
             ),
             const SizedBox(width: 6),
-            Text(
-              label,
-              style: textTheme.labelLarge?.copyWith(
-                color: selected ? Colors.white : AppColors.muted(brightness),
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.labelLarge?.copyWith(
+                  color: selected ? Colors.white : AppColors.muted(brightness),
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
               ),
             ),
           ],

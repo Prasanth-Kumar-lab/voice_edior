@@ -408,27 +408,42 @@ class StudioController extends GetxController {
     rendering.value = true;
     final int pos = positionMs.value;
     final bool wasPlaying = _player.playing;
-    final _Computed? r = await _compute(src, allowCachedRestyle: true);
-    if (token != _renderToken) return; // a newer selection superseded this one
-    rendering.value = false;
-    if (r == null) return;
-    enhancedPath.value = r.path;
-    stats.value = r.stats;
-    note.value = r.note;
-    savedTo.value = '';
-    unawaited(_peaks(r.path).then((List<double> w) {
-      if (token == _renderToken) enhancedWave.assignAll(w);
-    }));
-    listenOriginal.value = false;
-    await _player.stop();
-    await _player.setFilePath(r.path);
-    await _player.setSpeed(1.0);
-    await _player.setVolume(1.0);
-    final int dur = _player.duration?.inMilliseconds ?? durationMs.value;
-    final int resumePos = (dur > 0 && pos >= dur - 400) ? 0 : pos;
-    await _player.seek(Duration(milliseconds: resumePos));
-    if (wasPlaying || resumePos == 0) {
-      unawaited(_player.play());
+
+    try {
+      final _Computed? r = await _compute(src, allowCachedRestyle: true);
+      if (token != _renderToken) return;
+      if (r == null) return;
+
+      enhancedPath.value = r.path;
+      stats.value = r.stats;
+      note.value = r.note;
+      savedTo.value = '';
+
+      unawaited(_peaks(r.path).then((List<double> w) {
+        if (token == _renderToken) enhancedWave.assignAll(w);
+      }));
+
+      listenOriginal.value = false;
+      try {
+        await _player.stop();
+        if (File(r.path).existsSync()) {
+          await _player.setFilePath(r.path);
+          await _player.setSpeed(1.0);
+          await _player.setVolume(1.0);
+          final int dur = _player.duration?.inMilliseconds ?? durationMs.value;
+          final int resumePos = (dur > 0 && pos >= dur - 400) ? 0 : pos;
+          await _player.seek(Duration(milliseconds: resumePos));
+          if (wasPlaying) {
+            unawaited(_player.play());
+          }
+        }
+      } catch (_) {}
+    } catch (e) {
+      error.value = 'Failed to re-render audio: $e';
+    } finally {
+      if (token == _renderToken) {
+        rendering.value = false;
+      }
     }
   }
 
@@ -719,13 +734,18 @@ class StudioController extends GetxController {
   }
 
   Future<void> togglePlay() async {
-    if (_player.playing) {
-      _selectionPlaySub?.cancel();
-      _selectionPlaySub = null;
-      await _player.pause();
-    } else {
-      unawaited(_player.play());
-    }
+    try {
+      if (_player.playing) {
+        _selectionPlaySub?.cancel();
+        _selectionPlaySub = null;
+        await _player.pause();
+      } else {
+        if (durationMs.value > 0 && positionMs.value >= durationMs.value - 200) {
+          await _player.seek(Duration.zero);
+        }
+        unawaited(_player.play());
+      }
+    } catch (_) {}
   }
 
   Future<void> setListenOriginal(bool original) async {
@@ -784,8 +804,12 @@ class StudioController extends GetxController {
     _selectionPlaySub?.cancel();
     _renderToken++;
     rendering.value = false;
-    await _player.stop();
+    try {
+      await _player.stop();
+    } catch (_) {}
     playing.value = false;
+    positionMs.value = 0;
+    durationMs.value = 0;
     for (final String path in [originalPath.value, originalNormalizedPath.value, enhancedPath.value]) {
       if (path.isNotEmpty && (p.basename(path).startsWith('enhanced-') || p.basename(path).startsWith('orig-norm-') || p.basename(path).startsWith('audacity-'))) {
         try {
@@ -799,11 +823,14 @@ class StudioController extends GetxController {
     originalBackupPath.value = '';
     originalNormalizedPath.value = '';
     enhancedPath.value = '';
+    originalWave.clear();
+    enhancedWave.clear();
     isAudacityMode.value = false;
     showTrimmer.value = false;
     trimStart.value = 0.0;
     trimEnd.value = 1.0;
     customFx.value = const VocalFx();
+    filterBass.clear();
     note.value = '';
     error.value = '';
   }

@@ -105,83 +105,101 @@ class _Header extends StatelessWidget {
             child: const Icon(Icons.graphic_eq_rounded, color: Colors.white, size: 20),
           ),
           const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ShaderMask(
+                  shaderCallback: (r) => AppColors.signature.createShader(r),
+                  child: Text(
+                    'VocalPolish',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.titleLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                Text(
+                  '48 kHz AI Studio',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: t.labelSmall?.copyWith(color: AppColors.muted(b)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              ShaderMask(
-                shaderCallback: (r) => AppColors.signature.createShader(r),
-                child: Text('VocalPolish', style: t.titleLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w800)),
-              ),
-              Text('48 kHz AI Studio', style: t.labelSmall?.copyWith(color: AppColors.muted(b))),
+              if (onOpenSubscription != null) ...[
+                GestureDetector(
+                  onTap: onOpenSubscription,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                    decoration: const BoxDecoration(
+                      borderRadius: AppRadius.chip,
+                      gradient: AppColors.signature,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.workspace_premium_rounded, size: 13, color: Colors.white),
+                        const SizedBox(width: 4),
+                        Text('PRO', style: t.labelSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800)),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Obx(() {
+                final bool on = server.connected.value;
+                return InkWell(
+                  borderRadius: AppRadius.chip,
+                  onTap: () => _serverDialog(context, server),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                    decoration: BoxDecoration(
+                      borderRadius: AppRadius.chip,
+                      color: AppColors.surface(b),
+                      border: Border.all(color: AppColors.border(b)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 7,
+                          height: 7,
+                          decoration: BoxDecoration(shape: BoxShape.circle, color: on ? AppColors.success : AppColors.warning),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(on ? 'Studio AI' : 'On-device', style: t.labelSmall?.copyWith(fontWeight: FontWeight.w600)),
+                      ],
+                    ),
+                  ),
+                );
+              }),
+              if (onOpenProfile != null) ...[
+                const SizedBox(width: 6),
+                GestureDetector(
+                  onTap: onOpenProfile,
+                  child: Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: AppColors.surfaceAlt(b),
+                      border: Border.all(color: AppColors.accentBright, width: 1.4),
+                    ),
+                    child: const Center(
+                      child: Text('AR', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w800, color: Colors.white)),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
-          const Spacer(),
-          if (onOpenSubscription != null) ...[
-            GestureDetector(
-              onTap: onOpenSubscription,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: const BoxDecoration(
-                  borderRadius: AppRadius.chip,
-                  gradient: AppColors.signature,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.workspace_premium_rounded, size: 14, color: Colors.white),
-                    const SizedBox(width: 4),
-                    Text('PRO', style: t.labelSmall?.copyWith(color: Colors.white, fontWeight: FontWeight.w800)),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
-          Obx(() {
-            final bool on = server.connected.value;
-            return InkWell(
-              borderRadius: AppRadius.chip,
-              onTap: () => _serverDialog(context, server),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  borderRadius: AppRadius.chip,
-                  color: AppColors.surface(b),
-                  border: Border.all(color: AppColors.border(b)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(shape: BoxShape.circle, color: on ? AppColors.success : AppColors.warning),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(on ? 'Studio AI' : 'On-device', style: t.labelMedium),
-                  ],
-                ),
-              ),
-            );
-          }),
-          if (onOpenProfile != null) ...[
-            const SizedBox(width: 8),
-            GestureDetector(
-              onTap: onOpenProfile,
-              child: Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.surfaceAlt(b),
-                  border: Border.all(color: AppColors.accentBright, width: 1.4),
-                ),
-                child: const Center(
-                  child: Text('AR', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white)),
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -265,7 +283,14 @@ class _SelectPage extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Text('Zero-Noise + Pitch-Adaptive Body', style: t.labelSmall?.copyWith(color: AppColors.accentBright)),
+                        Expanded(
+                          child: Text(
+                            'Zero-Noise + Pitch-Adaptive Body',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: t.labelSmall?.copyWith(color: AppColors.accentBright),
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 6),
@@ -418,49 +443,60 @@ class _RecordingPage extends StatelessWidget {
     final NativeEngine e = c.engine;
     final TextTheme t = Theme.of(context).textTheme;
     final Brightness b = Theme.of(context).brightness;
-    return Column(
-      children: [
-        const SizedBox(height: AppSpacing.md),
-        Obx(() => Text(c.mode.value.title, style: t.labelLarge?.copyWith(color: AppColors.muted(b)))),
-        const SizedBox(height: 6),
-        Obx(() => Text(formatDuration(e.elapsedMs.value), style: t.displayMedium)),
-        const SizedBox(height: AppSpacing.md),
-        SizedBox(
-          height: 150,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(child: Obx(() => VpLiveWave(bars: e.bars.toList(), active: true, height: 150))),
-              const SizedBox(width: AppSpacing.sm),
-              Obx(() => VpDbMeter(rms: e.levels.value.inRms, peak: e.levels.value.inPeak, clip: e.levels.value.clip, height: 112, label: 'IN')),
-            ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: IntrinsicHeight(
+              child: Column(
+                children: [
+                  const SizedBox(height: AppSpacing.md),
+                  Obx(() => Text(c.mode.value.title, style: t.labelLarge?.copyWith(color: AppColors.muted(b)))),
+                  const SizedBox(height: 6),
+                  Obx(() => Text(formatDuration(e.elapsedMs.value), style: t.displayMedium)),
+                  const SizedBox(height: AppSpacing.md),
+                  SizedBox(
+                    height: 150,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Expanded(child: Obx(() => VpLiveWave(bars: e.bars.toList(), active: true, height: 150))),
+                        const SizedBox(width: AppSpacing.sm),
+                        Obx(() => VpDbMeter(rms: e.levels.value.inRms, peak: e.levels.value.inPeak, clip: e.levels.value.clip, height: 112, label: 'IN')),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Obx(() => e.native && e.headphones.value
+                      ? VpCard(
+                          onTap: () => e.setMonitor(!e.monitor.value),
+                          child: Row(
+                            children: [
+                              Icon(Icons.headphones_rounded, color: e.monitor.value ? AppColors.accentBright : AppColors.muted(b)),
+                              const SizedBox(width: 12),
+                              Expanded(child: Text(e.monitor.value ? 'Hearing your voice cleaned live' : 'Hear your voice cleaned live', style: t.titleMedium)),
+                              Switch(value: e.monitor.value, onChanged: (v) => e.setMonitor(v)),
+                            ],
+                          ),
+                        )
+                      : const SizedBox.shrink()),
+                  const Spacer(),
+                  Text(
+                    'Stay quiet for the first two seconds — it helps the engine learn your room.',
+                    textAlign: TextAlign.center,
+                    style: t.bodySmall?.copyWith(color: AppColors.muted(b)),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  VpRecordButton(recording: true, onPressed: c.stopRecording),
+                  TextButton(onPressed: c.cancelRecording, child: const Text('Cancel')),
+                  const SizedBox(height: AppSpacing.sm),
+                ],
+              ),
+            ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.md),
-        Obx(() => e.native && e.headphones.value
-            ? VpCard(
-                onTap: () => e.setMonitor(!e.monitor.value),
-                child: Row(
-                  children: [
-                    Icon(Icons.headphones_rounded, color: e.monitor.value ? AppColors.accentBright : AppColors.muted(b)),
-                    const SizedBox(width: 12),
-                    Expanded(child: Text(e.monitor.value ? 'Hearing your voice cleaned live' : 'Hear your voice cleaned live', style: t.titleMedium)),
-                    Switch(value: e.monitor.value, onChanged: (v) => e.setMonitor(v)),
-                  ],
-                ),
-              )
-            : const SizedBox.shrink()),
-        const Spacer(),
-        Text(
-          'Stay quiet for the first two seconds — it helps the engine learn your room.',
-          textAlign: TextAlign.center,
-          style: t.bodySmall?.copyWith(color: AppColors.muted(b)),
-        ),
-        const SizedBox(height: AppSpacing.md),
-        VpRecordButton(recording: true, onPressed: c.stopRecording),
-        TextButton(onPressed: c.cancelRecording, child: const Text('Cancel')),
-        const SizedBox(height: AppSpacing.sm),
-      ],
+        );
+      },
     );
   }
 }
@@ -570,35 +606,75 @@ class _ResultPage extends StatelessWidget {
                     onScrub: c.seek,
                   )),
               const SizedBox(height: AppSpacing.sm),
-              Row(
-                children: [
-                  Obx(() => IconButton.filled(
-                        onPressed: c.togglePlay,
-                        iconSize: 30,
-                        icon: Icon(c.playing.value ? Icons.pause_rounded : Icons.play_arrow_rounded),
-                      )),
-                  const SizedBox(width: AppSpacing.sm),
-                  Obx(() => Text('${formatDuration(c.positionMs.value)} / ${formatDuration(c.durationMs.value)}', style: t.labelLarge)),
-                  const Spacer(),
-                  Obx(
-                    () => FilterChip(
-                      visualDensity: VisualDensity.compact,
-                      avatar: Icon(Icons.crop_rounded, size: 14, color: c.showTrimmer.value ? Colors.white : AppColors.accentBright),
-                      label: const Text('Edit / Trim', style: TextStyle(fontSize: 11)),
-                      selected: c.showTrimmer.value,
-                      onSelected: (_) => c.toggleTrimmer(),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Obx(
-                    () => FilterChip(
-                      visualDensity: VisualDensity.compact,
-                      label: const Text('A/B Level', style: TextStyle(fontSize: 11)),
-                      selected: c.loudnessMatchedAb.value,
-                      onSelected: (v) => c.loudnessMatchedAb.value = v,
-                    ),
-                  ),
-                ],
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final bool isNarrow = constraints.maxWidth < 360;
+                  return Column(
+                    children: [
+                      Row(
+                        children: [
+                          Obx(() => IconButton.filled(
+                                onPressed: c.togglePlay,
+                                iconSize: 28,
+                                icon: Icon(c.playing.value ? Icons.pause_rounded : Icons.play_arrow_rounded),
+                              )),
+                          const SizedBox(width: AppSpacing.sm),
+                          Obx(() => Text(
+                                '${formatDuration(c.positionMs.value)} / ${formatDuration(c.durationMs.value)}',
+                                style: t.labelLarge,
+                              )),
+                          if (!isNarrow) ...[
+                            const Spacer(),
+                            Obx(
+                              () => FilterChip(
+                                visualDensity: VisualDensity.compact,
+                                avatar: Icon(Icons.crop_rounded, size: 14, color: c.showTrimmer.value ? Colors.white : AppColors.accentBright),
+                                label: const Text('Edit / Trim', style: TextStyle(fontSize: 11)),
+                                selected: c.showTrimmer.value,
+                                onSelected: (_) => c.toggleTrimmer(),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Obx(
+                              () => FilterChip(
+                                visualDensity: VisualDensity.compact,
+                                label: const Text('A/B Level', style: TextStyle(fontSize: 11)),
+                                selected: c.loudnessMatchedAb.value,
+                                onSelected: (v) => c.loudnessMatchedAb.value = v,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      if (isNarrow) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Obx(
+                              () => FilterChip(
+                                visualDensity: VisualDensity.compact,
+                                avatar: Icon(Icons.crop_rounded, size: 14, color: c.showTrimmer.value ? Colors.white : AppColors.accentBright),
+                                label: const Text('Edit / Trim', style: TextStyle(fontSize: 11)),
+                                selected: c.showTrimmer.value,
+                                onSelected: (_) => c.toggleTrimmer(),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Obx(
+                              () => FilterChip(
+                                visualDensity: VisualDensity.compact,
+                                label: const Text('A/B Level', style: TextStyle(fontSize: 11)),
+                                selected: c.loudnessMatchedAb.value,
+                                onSelected: (v) => c.loudnessMatchedAb.value = v,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  );
+                },
               ),
               _WaveformTrimmerBar(c),
               const SizedBox(height: AppSpacing.xs),
@@ -816,11 +892,15 @@ class _WaveformTrimmerBar extends StatelessWidget {
                 const Icon(Icons.crop_rounded, size: 16, color: AppColors.accentBright),
                 const SizedBox(width: 6),
                 Text('Selection: ', style: t.labelSmall?.copyWith(color: AppColors.muted(b))),
-                Text(
-                  '${formatDuration(startMs)} – ${formatDuration(endMs)} (${selSec.toStringAsFixed(1)}s)',
-                  style: t.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+                Expanded(
+                  child: Text(
+                    '${formatDuration(startMs)} – ${formatDuration(endMs)} (${selSec.toStringAsFixed(1)}s)',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+                  ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 6),
                 InkWell(
                   onTap: c.restoreOriginalTake,
                   borderRadius: AppRadius.chip,
@@ -1720,6 +1800,8 @@ class _FilterBassCustomizer extends StatelessWidget {
                 Expanded(
                   child: Text(
                     'Bass & Warmth Depth',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: t.labelMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                       letterSpacing: 0.2,

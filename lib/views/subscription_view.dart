@@ -357,7 +357,14 @@ class _PlanCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 6),
-                Text(period, style: t.bodySmall?.copyWith(color: AppColors.muted(b))),
+                Expanded(
+                  child: Text(
+                    period,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.bodySmall?.copyWith(color: AppColors.muted(b)),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 6),

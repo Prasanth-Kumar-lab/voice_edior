@@ -14,7 +14,7 @@ class AdminView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final AdminController c = Get.put(AdminController());
+    final AdminController c = Get.find<AdminController>();
     final TextTheme t = Theme.of(context).textTheme;
     final Brightness b = Theme.of(context).brightness;
 
