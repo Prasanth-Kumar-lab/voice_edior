@@ -51,15 +51,13 @@ class VocalChain(private val sr: Int) {
     private var limGain = 1.0
 
     private val reverb = Reverb(sr)
-    private val revHp = Biquad().also { it.highpass(sr, 240.0) }
-    private val revLp = Biquad().also { it.lowpass(sr, 3200.0) }
 
     // Harmonic exciter: new highs generated from the 3.2 kHz+ presence band, only the new harmonics are mixed back
     private val exHp1 = Biquad().also { it.highpass(sr, 3200.0) }
     private val exHp2 = Biquad().also { it.highpass(sr, 3200.0) }
-    private val exOut1 = Biquad().also { it.highpass(sr, 5200.0) }
-    private val exOut2 = Biquad().also { it.lowpass(sr, 10500.0) }
-    private var exRef = 0.015
+    private val exOut1 = Biquad().also { it.highpass(sr, 5440.0) }
+    private val exOut2 = Biquad().also { it.highpass(sr, 5440.0) }
+    private var exRef = 1e-3
 
     // latency-matched dry path for bypass
     private val latency = SpectralDenoiser.N + look
@@ -75,7 +73,7 @@ class VocalChain(private val sr: Int) {
 
     fun reset() {
         hpf1.reset(); hpf2.reset(); eq.forEach { it.reset() }; sibHp1.reset(); sibHp2.reset(); sibLp1.reset(); sibLp2.reset(); sibDetect.reset(); bodyEnv = 0.0
-        reverb.reset(); revHp.reset(); revLp.reset(); exHp1.reset(); exHp2.reset(); exOut1.reset(); exOut2.reset(); exRef = 0.015; gateEnv = 0.0; gateGain = 1.0; sibEnv = 0.0; sibGain = 1.0; compEnv = 0.0; compGrDb = 0.0
+        reverb.reset(); exHp1.reset(); exHp2.reset(); exOut1.reset(); exOut2.reset(); exRef = 1e-3; gateEnv = 0.0; gateGain = 1.0; sibEnv = 0.0; sibGain = 1.0; compEnv = 0.0; compGrDb = 0.0
         limGain = 1.0
     }
 
@@ -120,15 +118,15 @@ class VocalChain(private val sr: Int) {
         val gateThr = dbToLin(f.gateThresholdDb.toDouble())
         val gateAtk = timeCoef(2.0, sr)
         val gateRel = timeCoef(f.gateReleaseMs.toDouble().coerceIn(20.0, 600.0), sr)
-        val envCoef = timeCoef(10.0, sr)
-        val gateHoldN = (0.035 * sr).toInt()
+        val envCoef = timeCoef(12.0, sr)
+        val gateHoldN = (0.08 * sr).toInt()
         val gateFloor = dbToLin(-f.gateDepthDb.toDouble().coerceIn(6.0, 60.0))
 
         val sibAmt = f.deEss.toDouble().coerceIn(0.0, 1.0)
-        val sibAtk = timeCoef(0.5, sr)
-        val sibRel = timeCoef(45.0, sr)
-        val sibRatioThr = 0.54 - 0.26 * sibAmt
-        val sibMinGain = dbToLin(-(8.0 + 14.0 * sibAmt))
+        val sibAtk = timeCoef(0.8, sr)
+        val sibRel = timeCoef(55.0, sr)
+        val sibRatioThr = 0.75 - 0.5 * sibAmt
+        val sibMinGain = dbToLin(-(5.0 + 13.0 * sibAmt))
         val bodyRel = timeCoef(30.0, sr)
 
         val compAtk = timeCoef(f.compAttackMs.toDouble(), sr)
@@ -139,9 +137,9 @@ class VocalChain(private val sr: Int) {
         val makeup = dbToLin(f.compMakeupDb.toDouble())
         val warm = f.warmth.toDouble().coerceIn(0.0, 1.0)
         val exAmt = f.exciter.toDouble().coerceIn(0.0, 1.0)
-        val exDrive = 1.8 + 2.4 * exAmt
-        val exRel = timeCoef(180.0, sr)
-        val satDrive = 1.0 + 4.0 * warm
+        val exDrive = 2.5 + 3.0 * exAmt
+        val exRel = timeCoef(250.0, sr)
+        val satDrive = 1.0 + 5.0 * warm
         val rvMix = f.reverbMix.toDouble().coerceIn(0.0, 1.0)
         val limRel = timeCoef(90.0, sr)
         val limAtk = 0.2
@@ -175,6 +173,27 @@ class VocalChain(private val sr: Int) {
             } else gateGain = 1.0
             gateOpenAcc += if (gateGain > 0.5) 1.0 else 0.0
 
+            if (f.deEssOn && sibAmt > 0.01) {
+                val hi = sibHp2.process(sibHp1.process(x))
+                val lo = sibLp2.process(sibLp1.process(x))
+                val det = abs(sibDetect.process(x))
+                sibEnv = if (det > sibEnv) sibAtk * sibEnv + (1 - sibAtk) * det else sibRel * sibEnv + (1 - sibRel) * det
+                val ax = abs(x)
+                bodyEnv = if (ax > bodyEnv) bodyEnv * 0.995 + ax * 0.005 else bodyEnv * bodyRel + ax * (1 - bodyRel)
+                // Relative detection: reduce only when the sibilant band dominates the signal,
+                // so it works at any recording level.
+                var target = 1.0
+                if (bodyEnv > 1e-4) {
+                    val ratioSib = sibEnv / bodyEnv
+                    if (ratioSib > sibRatioThr) target = (sibRatioThr / ratioSib).coerceIn(sibMinGain, 1.0)
+                }
+                val c = if (target < sibGain) sibAtk else sibRel
+                sibGain = c * sibGain + (1 - c) * target
+                x = lo + hi * sibGain
+                val grDb = -linToDb(sibGain)
+                if (grDb > sibMax) sibMax = grDb
+            } else sibGain = 1.0
+
             for (b in 0 until 8) if (eqActive[b]) x = eq[b].process(x)
 
             if (f.compOn) {
@@ -192,47 +211,21 @@ class VocalChain(private val sr: Int) {
                 if (compGrDb > grMax) grMax = compGrDb
             } else compGrDb = 0.0
 
-            val axBody = abs(x)
-            bodyEnv = if (axBody > bodyEnv) bodyEnv * 0.99 + axBody * 0.01 else bodyEnv * bodyRel + axBody * (1 - bodyRel)
-
-            // De-esser tames sibilance ('sshhh' / 'sss') and provides sibGain to suppress exciter on sibilants
-            if (f.deEssOn && sibAmt > 0.01) {
-                val hi = sibHp2.process(sibHp1.process(x))
-                val lo = sibLp2.process(sibLp1.process(x))
-                val det = abs(sibDetect.process(x))
-                sibEnv = if (det > sibEnv) sibAtk * sibEnv + (1 - sibAtk) * det else sibRel * sibEnv + (1 - sibRel) * det
-                var target = 1.0
-                if (bodyEnv > 1e-4) {
-                    val ratioSib = sibEnv / bodyEnv
-                    if (ratioSib > sibRatioThr) target = (sibRatioThr / ratioSib).coerceIn(sibMinGain, 1.0)
-                }
-                val c = if (target < sibGain) sibAtk else sibRel
-                sibGain = c * sibGain + (1 - c) * target
-                x = lo + hi * sibGain
-                val grDb = -linToDb(sibGain)
-                if (grDb > sibMax) sibMax = grDb
-            } else sibGain = 1.0
-
-            // Speech-gated, de-ess-ducked harmonic presence (band-limited 5.2 - 10.5 kHz, never boosts noise or sibilance)
-            if (exAmt > 0.01 && bodyEnv > 0.012) {
+            // Harmonic exciter (after dynamics): restores the 'air' that phone mics lose above ~8 kHz.
+            if (exAmt > 0.01) {
                 val band = exHp2.process(exHp1.process(x))
                 val ab = abs(band)
                 exRef = if (ab > exRef) exRef * 0.9 + ab * 0.1 else exRef * exRel + ab * (1 - exRel)
-                val ref = max(exRef, bodyEnv * 0.14).coerceAtLeast(0.008)
+                val ref = max(exRef, 1e-4)
                 val harm = exOut2.process(exOut1.process(Math.tanh(band / ref * exDrive) * ref))
-                x += harm * exAmt * 0.65 * (sibGain * sibGain)
+                x += harm * exAmt * 1.4
             }
 
             // Analog-style warmth: gentle tanh saturation (unity gain for small signals).
             if (warm > 0.001) x = Math.tanh(x * satDrive) / satDrive
 
-            // Band-limited (240 Hz - 3.2 kHz) plate reverb send so sibilants never ring as 'sshhh' in the tail
-            if (rvMix > 0.001) {
-                val revSend = revLp.process(revHp.process(x))
-                x += reverb.process(revSend) * rvMix * 0.5
-            } else {
-                reverb.process(0.0)
-            }
+            // Plate reverb send, kept out of the compressor so the tail never pumps.
+            if (rvMix > 0.001) x += reverb.process(x) * rvMix * 0.6 else reverb.process(0.0)
 
             x *= outGain
 

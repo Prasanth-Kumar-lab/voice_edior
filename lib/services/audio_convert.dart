@@ -58,30 +58,6 @@ class AudioConvert {
     return inputWav;
   }
 
-  /// Pre-isolates the vocal using FFmpeg's adaptive FFT Wiener denoiser (afftdn), sub-vocal rumble
-  /// high-pass, and ultrasonic/hiss low-pass before the Kotlin/Python harmonic vocal isolator runs.
-  static Future<String> preIsolateVocal(
-    String inputWav, {
-    bool vocalsMode = false,
-    double? previewSeconds,
-  }) async {
-    try {
-      final Directory dir = await getTemporaryDirectory();
-      final String out = p.join(dir.path, 'pre-iso-${DateTime.now().millisecondsSinceEpoch}.wav');
-      final String durArg =
-          (previewSeconds != null && previewSeconds > 0) ? '-t ${previewSeconds.toStringAsFixed(1)} ' : '';
-      final int lpHz = vocalsMode ? 13000 : 11500;
-      final session = await FFmpegKit.execute(
-        '-y $durArg-i "${inputWav.replaceAll('\\', '/')}" -af "highpass=f=85:poles=2,adeclick=w=55:o=75:t=2.2,afftdn=nf=-25:nr=38:nt=w:tn=1:om=o,afftdn=nf=-32:nr=24:nt=v:tn=1,lowpass=f=$lpHz:poles=2" -vn -ac 1 -ar 48000 -c:a pcm_s16le "$out"',
-      );
-      final rc = await session.getReturnCode();
-      if (ReturnCode.isSuccess(rc) && File(out).existsSync() && File(out).lengthSync() > 100) {
-        return out;
-      }
-    } catch (_) {}
-    return inputWav;
-  }
-
   /// Transcode a rendered 48 kHz WAV master to [format] with embedded metadata tags
   /// and optional range selection (`trimStartMs` .. `trimEndMs`).
   static Future<String> transcodeMaster({

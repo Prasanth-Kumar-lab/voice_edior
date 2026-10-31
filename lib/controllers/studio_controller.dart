@@ -81,8 +81,6 @@ class StudioController extends GetxController {
   final List<StreamSubscription<dynamic>> _subs = [];
   Timer? _debounce;
   int _renderToken = 0;
-  String _cachedPreIsolatedKey = '';
-  String _cachedPreIsolatedPath = '';
 
   /// 0 = Choose, 1 = Capture, 2 = Result — drives the step indicator.
   int get step => switch (phase.value) {
@@ -276,24 +274,6 @@ class StudioController extends GetxController {
     final String lv = level.value.id;
     String note0 = '';
 
-    final String preKey = '$wavPath|$vocals|${preview10s.value}';
-    String cleanInput;
-    if (_cachedPreIsolatedKey == preKey &&
-        _cachedPreIsolatedPath.isNotEmpty &&
-        await File(_cachedPreIsolatedPath).exists()) {
-      cleanInput = _cachedPreIsolatedPath;
-    } else {
-      stage.value = 'Isolating vocal & stripping noise';
-      progress.value = 0.10;
-      cleanInput = await AudioConvert.preIsolateVocal(
-        wavPath,
-        vocalsMode: vocals,
-        previewSeconds: preview10s.value ? 10.0 : null,
-      );
-      _cachedPreIsolatedKey = preKey;
-      _cachedPreIsolatedPath = cleanInput;
-    }
-
     final AdminController? adm =
         Get.isRegistered<AdminController>() ? Get.find<AdminController>() : null;
 
@@ -302,7 +282,7 @@ class StudioController extends GetxController {
       final Worker w2 = ever<double>(engine.enhanceProgress, (double v) => progress.value = v);
       try {
         final NativeEnhance r = await engine.enhance(
-          cleanInput,
+          wavPath,
           mode.value,
           tone: t,
           space: s,
@@ -316,7 +296,7 @@ class StudioController extends GetxController {
             engine: 'Studio AI',
             lufsIn: r.lufsIn,
             lufsOut: r.lufsOut,
-            cleanerDb: _cleaner(r.floorIn, r.lufsIn, r.floorOut, r.lufsOut).clamp(12.0, 70.0),
+            cleanerDb: _cleaner(r.floorIn, r.lufsIn, r.floorOut, r.lufsOut),
             voiceType: r.voiceType,
             f0: r.f0,
             stereo: r.stereo,
@@ -346,13 +326,13 @@ class StudioController extends GetxController {
         }
         final String? email = adm?.currentUser.value?.email;
         final ServerResult r = await server.enhance(
-          cleanInput,
+          wavPath,
           mode.value,
           tone: t,
           space: s,
           level: lv,
           strength: strength.value,
-          voiceIsolation: true,
+          voiceIsolation: voiceIsolation.value,
           previewSeconds: preview10s.value ? 10.0 : null,
           userEmail: email,
           onProgress: (String st, double pr) {
