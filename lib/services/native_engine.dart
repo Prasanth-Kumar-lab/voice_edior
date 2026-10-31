@@ -169,17 +169,22 @@ class NativeEngine extends GetxService {
     String space = 'dry',
     String level = 'enhanced',
     double strength = 1.0,
+    Map<String, dynamic>? customFx,
   }) async {
     enhanceStage.value = 'Starting';
     enhanceProgress.value = 0;
-    final Map<dynamic, dynamic>? r = await _m.invokeMapMethod('enhance', {
+    final Map<String, dynamic> args = <String, dynamic>{
       'input': input,
       'mode': mode.id,
       'tone': tone,
       'space': space,
       'level': level,
       'strength': strength,
-    });
+    };
+    if (customFx != null) {
+      args['customFx'] = customFx;
+    }
+    final Map<dynamic, dynamic>? r = await _m.invokeMapMethod('enhance', args);
     return NativeEnhance(
       path: r!['filePath'] as String,
       durationMs: (r['durationMs'] as num).toInt(),

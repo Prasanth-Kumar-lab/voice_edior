@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:share_plus/share_plus.dart';
 import '../models/enhance_mode.dart';
 import '../models/podcast_presets.dart';
+import '../models/vocal_fx.dart';
 import '../models/vocal_presets.dart';
 import '../services/audio_convert.dart';
 import '../services/enhance_server.dart';
@@ -65,12 +66,20 @@ class StudioController extends GetxController {
   final rendering = false.obs; // re-applying a preset on the result screen
 
   final originalPath = ''.obs;
+  final originalBackupPath = ''.obs; // uncropped master for undo/restore
   final originalNormalizedPath = ''.obs;
   final enhancedPath = ''.obs;
   final originalWave = <double>[].obs;
   final enhancedWave = <double>[].obs;
   final Rxn<EnhanceStats> stats = Rxn<EnhanceStats>();
   final savedTo = ''.obs;
+
+  // Audacity Studio & Waveform Trimmer state
+  final isAudacityMode = false.obs; // Toggle between Quick Presets & Full Audacity Controls
+  final showTrimmer = false.obs;    // Visual draggable start/end handles on waveform
+  final trimStart = 0.0.obs;        // 0.0 .. 1.0 fraction
+  final trimEnd = 1.0.obs;          // 0.0 .. 1.0 fraction
+  final customFx = const VocalFx().obs; // Manual Audacity sliders & EQ
 
   final playing = false.obs;
   final listenOriginal = false.obs;
@@ -79,6 +88,7 @@ class StudioController extends GetxController {
 
   final AudioPlayer _player = AudioPlayer();
   final List<StreamSubscription<dynamic>> _subs = [];
+  StreamSubscription<Duration>? _selectionPlaySub;
   Timer? _debounce;
   int _renderToken = 0;
 
@@ -232,6 +242,10 @@ class StudioController extends GetxController {
     stage.value = 'Preparing';
     progress.value = 0.02;
     originalPath.value = wavPath;
+    originalBackupPath.value = wavPath;
+    trimStart.value = 0.0;
+    trimEnd.value = 1.0;
+    showTrimmer.value = false;
     enhancedPath.value = '';
     stats.value = null;
     savedTo.value = '';
@@ -288,12 +302,13 @@ class StudioController extends GetxController {
           space: s,
           level: lv,
           strength: strength.value,
+          customFx: isAudacityMode.value ? customFx.value.toMap() : null,
         );
         if (!allowCachedRestyle && adm != null) unawaited(adm.syncFromMongo());
         return _Computed(
           r.path,
           EnhanceStats(
-            engine: 'Studio AI',
+            engine: isAudacityMode.value ? 'Audacity DSP' : 'Studio AI',
             lufsIn: r.lufsIn,
             lufsOut: r.lufsOut,
             cleanerDb: _cleaner(r.floorIn, r.lufsIn, r.floorOut, r.lufsOut),
@@ -408,6 +423,255 @@ class StudioController extends GetxController {
     }
   }
 
+  // ── Audacity Waveform Trimmer Operations ─────────────────────────────────
+
+  void toggleTrimmer() {
+    showTrimmer.value = !showTrimmer.value;
+  }
+
+  void setTrimStart(double v) {
+    trimStart.value = v.clamp(0.0, (trimEnd.value - 0.02).clamp(0.0, 1.0));
+  }
+
+  void setTrimEnd(double v) {
+    trimEnd.value = v.clamp((trimStart.value + 0.02).clamp(0.0, 1.0), 1.0);
+  }
+
+  Future<void> playSelection() async {
+    final int dur = durationMs.value;
+    if (dur <= 0) return;
+    final int startMs = (dur * trimStart.value).round();
+    final int endMs = (dur * trimEnd.value).round();
+    if (startMs >= endMs) return;
+
+    _selectionPlaySub?.cancel();
+    await _player.pause();
+    await _player.seek(Duration(milliseconds: startMs));
+    await _player.play();
+
+    _selectionPlaySub = _player.positionStream.listen((Duration pos) {
+      if (pos.inMilliseconds >= endMs) {
+        _player.pause();
+        _selectionPlaySub?.cancel();
+        _selectionPlaySub = null;
+      }
+    });
+  }
+
+  Future<void> trimToSelection() async {
+    final String src = originalPath.value;
+    if (src.isEmpty || trimStart.value >= trimEnd.value) return;
+    final int dur = durationMs.value;
+    if (dur <= 0) return;
+    final int startMs = (dur * trimStart.value).round();
+    final int endMs = (dur * trimEnd.value).round();
+    if (endMs - startMs < 500) {
+      Get.snackbar('Selection too short', 'Keep at least 0.5s for audio processing.');
+      return;
+    }
+    rendering.value = true;
+    try {
+      final WavData wav = await WavIo.readFile(src);
+      final WavData cropped = WavIo.crop(wav, startMs, endMs);
+      final String newPath = p.join(
+        p.dirname(src),
+        'audacity-trim-${DateTime.now().millisecondsSinceEpoch}.wav',
+      );
+      await WavIo.writeFile(newPath, cropped);
+      originalPath.value = newPath;
+      trimStart.value = 0.0;
+      trimEnd.value = 1.0;
+      originalNormalizedPath.value = await AudioConvert.createNormalizedOriginal(
+        newPath,
+        targetLufs: mode.value == EnhanceMode.vocals ? -14.0 : -16.0,
+      ).catchError((_) => newPath);
+      final List<double> peaks = await _peaks(newPath);
+      originalWave.assignAll(peaks);
+      await _rerender();
+      Get.snackbar('Trimmed', 'Trimmed audio to selection (${((endMs - startMs) / 1000).toStringAsFixed(1)}s)');
+    } catch (e) {
+      Get.snackbar('Trim error', 'Failed to trim: $e');
+    } finally {
+      rendering.value = false;
+    }
+  }
+
+  Future<void> deleteSelection() async {
+    final String src = originalPath.value;
+    if (src.isEmpty || trimStart.value >= trimEnd.value) return;
+    final int dur = durationMs.value;
+    if (dur <= 0) return;
+    final int startMs = (dur * trimStart.value).round();
+    final int endMs = (dur * trimEnd.value).round();
+    final int remMs = dur - (endMs - startMs);
+    if (remMs < 500) {
+      Get.snackbar('Remaining audio too short', 'Remaining audio must be at least 0.5s long.');
+      return;
+    }
+    rendering.value = true;
+    try {
+      final WavData wav = await WavIo.readFile(src);
+      final WavData cut = WavIo.deleteRange(wav, startMs, endMs);
+      final String newPath = p.join(
+        p.dirname(src),
+        'audacity-cut-${DateTime.now().millisecondsSinceEpoch}.wav',
+      );
+      await WavIo.writeFile(newPath, cut);
+      originalPath.value = newPath;
+      trimStart.value = 0.0;
+      trimEnd.value = 1.0;
+      originalNormalizedPath.value = await AudioConvert.createNormalizedOriginal(
+        newPath,
+        targetLufs: mode.value == EnhanceMode.vocals ? -14.0 : -16.0,
+      ).catchError((_) => newPath);
+      final List<double> peaks = await _peaks(newPath);
+      originalWave.assignAll(peaks);
+      await _rerender();
+      Get.snackbar('Cut Selection', 'Deleted selection from audio');
+    } catch (e) {
+      Get.snackbar('Cut error', 'Failed to cut selection: $e');
+    } finally {
+      rendering.value = false;
+    }
+  }
+
+  Future<void> silenceSelection() async {
+    final String src = originalPath.value;
+    if (src.isEmpty || trimStart.value >= trimEnd.value) return;
+    final int dur = durationMs.value;
+    if (dur <= 0) return;
+    final int startMs = (dur * trimStart.value).round();
+    final int endMs = (dur * trimEnd.value).round();
+    rendering.value = true;
+    try {
+      final WavData wav = await WavIo.readFile(src);
+      final WavData silenced = WavIo.silenceRange(wav, startMs, endMs);
+      final String newPath = p.join(
+        p.dirname(src),
+        'audacity-silence-${DateTime.now().millisecondsSinceEpoch}.wav',
+      );
+      await WavIo.writeFile(newPath, silenced);
+      originalPath.value = newPath;
+      originalNormalizedPath.value = await AudioConvert.createNormalizedOriginal(
+        newPath,
+        targetLufs: mode.value == EnhanceMode.vocals ? -14.0 : -16.0,
+      ).catchError((_) => newPath);
+      final List<double> peaks = await _peaks(newPath);
+      originalWave.assignAll(peaks);
+      await _rerender();
+      Get.snackbar('Silenced', 'Selected region silenced');
+    } catch (e) {
+      Get.snackbar('Silence error', 'Failed to silence selection: $e');
+    } finally {
+      rendering.value = false;
+    }
+  }
+
+  Future<void> restoreOriginalTake() async {
+    if (originalBackupPath.value.isEmpty || originalBackupPath.value == originalPath.value) {
+      Get.snackbar('Original Audio', 'Audio is already at its original state');
+      return;
+    }
+    rendering.value = true;
+    try {
+      originalPath.value = originalBackupPath.value;
+      trimStart.value = 0.0;
+      trimEnd.value = 1.0;
+      originalNormalizedPath.value = await AudioConvert.createNormalizedOriginal(
+        originalPath.value,
+        targetLufs: mode.value == EnhanceMode.vocals ? -14.0 : -16.0,
+      ).catchError((_) => originalPath.value);
+      final List<double> peaks = await _peaks(originalPath.value);
+      originalWave.assignAll(peaks);
+      await _rerender();
+      Get.snackbar('Restored', 'Restored unedited take');
+    } catch (e) {
+      Get.snackbar('Restore error', 'Failed to restore: $e');
+    } finally {
+      rendering.value = false;
+    }
+  }
+
+  // ── Audacity Studio Manual Slider Controls ───────────────────────────────
+
+  void toggleAudacityMode() {
+    isAudacityMode.value = !isAudacityMode.value;
+    _rerenderSoon(immediate: true);
+  }
+
+  void setCustomBandGain(int index, double gainDb) {
+    final List<double> g = List<double>.from(customFx.value.eqGains);
+    if (index >= 0 && index < g.length) {
+      g[index] = gainDb.clamp(-12.0, 12.0);
+      customFx.value = customFx.value.copyWith(eqGains: g, eqOn: true);
+      _rerenderSoon();
+    }
+  }
+
+  void setCustomDenoise(double val) {
+    customFx.value = customFx.value.copyWith(denoise: val.clamp(0.0, 1.0));
+    _rerenderSoon();
+  }
+
+  void setCustomGateThreshold(double db) {
+    customFx.value = customFx.value.copyWith(gateThresholdDb: db.clamp(-60.0, -10.0), gateOn: true);
+    _rerenderSoon();
+  }
+
+  void setCustomGateDepth(double db) {
+    customFx.value = customFx.value.copyWith(gateDepthDb: db.clamp(-60.0, -6.0), gateOn: true);
+    _rerenderSoon();
+  }
+
+  void setCustomHighPass(double hz) {
+    customFx.value = customFx.value.copyWith(hpfHz: hz.clamp(20.0, 250.0));
+    _rerenderSoon();
+  }
+
+  void setCustomCompressor({double? thresholdDb, double? ratio, double? makeupDb}) {
+    customFx.value = customFx.value.copyWith(
+      compOn: true,
+      compThresholdDb: thresholdDb?.clamp(-40.0, 0.0),
+      compRatio: ratio?.clamp(1.0, 10.0),
+      compMakeupDb: makeupDb?.clamp(0.0, 15.0),
+    );
+    _rerenderSoon();
+  }
+
+  void setCustomDeEss(double val) {
+    customFx.value = customFx.value.copyWith(deEss: val.clamp(0.0, 1.0), deEssOn: val > 0.01);
+    _rerenderSoon();
+  }
+
+  void setCustomWarmth(double val) {
+    customFx.value = customFx.value.copyWith(warmth: val.clamp(0.0, 1.0));
+    _rerenderSoon();
+  }
+
+  void setCustomExciter(double val) {
+    customFx.value = customFx.value.copyWith(exciter: val.clamp(0.0, 1.0));
+    _rerenderSoon();
+  }
+
+  void setCustomReverb({double? mix, double? size, double? damp}) {
+    customFx.value = customFx.value.copyWith(
+      reverbMix: mix?.clamp(0.0, 0.6),
+      reverbSize: size?.clamp(0.0, 1.0),
+      reverbDamp: damp?.clamp(0.0, 1.0),
+    );
+    _rerenderSoon();
+  }
+
+  void setCustomTargetLufs(double lufs) {
+    customFx.value = customFx.value.copyWith(targetLufs: lufs.clamp(-24.0, -10.0));
+    _rerenderSoon();
+  }
+
+  void resetCustomFx() {
+    customFx.value = const VocalFx();
+    _rerenderSoon(immediate: true);
+  }
+
   // ── preview player (A/B) ─────────────────────────────────────────────────
 
   Future<void> _load(String path, {bool autoplay = false}) async {
@@ -421,6 +685,8 @@ class StudioController extends GetxController {
 
   Future<void> togglePlay() async {
     if (_player.playing) {
+      _selectionPlaySub?.cancel();
+      _selectionPlaySub = null;
       await _player.pause();
     } else {
       unawaited(_player.play());
@@ -454,7 +720,9 @@ class StudioController extends GetxController {
   String get _fileName {
     final DateTime n = DateTime.now();
     String two(int v) => v.toString().padLeft(2, '0');
-    final String extra = mode.value == EnhanceMode.vocals ? '-${tone.value.id}-${space.value.id}' : '-${podTone.value.id}-${level.value.id}';
+    final String extra = isAudacityMode.value
+        ? '-audacity'
+        : (mode.value == EnhanceMode.vocals ? '-${tone.value.id}-${space.value.id}' : '-${podTone.value.id}-${level.value.id}');
     return 'VocalPolish-${mode.value.id}$extra-${n.year}${two(n.month)}${two(n.day)}-${two(n.hour)}${two(n.minute)}${two(n.second)}.wav';
   }
 
@@ -478,12 +746,13 @@ class StudioController extends GetxController {
 
   Future<void> reset() async {
     _debounce?.cancel();
+    _selectionPlaySub?.cancel();
     _renderToken++;
     rendering.value = false;
     await _player.stop();
     playing.value = false;
     for (final String path in [originalPath.value, originalNormalizedPath.value, enhancedPath.value]) {
-      if (path.isNotEmpty && (p.basename(path).startsWith('enhanced-') || p.basename(path).startsWith('orig-norm-'))) {
+      if (path.isNotEmpty && (p.basename(path).startsWith('enhanced-') || p.basename(path).startsWith('orig-norm-') || p.basename(path).startsWith('audacity-'))) {
         try {
           File(path).deleteSync();
         } catch (_) {}
@@ -492,8 +761,14 @@ class StudioController extends GetxController {
     phase.value = StudioPhase.select;
     stats.value = null;
     originalPath.value = '';
+    originalBackupPath.value = '';
     originalNormalizedPath.value = '';
     enhancedPath.value = '';
+    isAudacityMode.value = false;
+    showTrimmer.value = false;
+    trimStart.value = 0.0;
+    trimEnd.value = 1.0;
+    customFx.value = const VocalFx();
     note.value = '';
     error.value = '';
   }
@@ -501,6 +776,7 @@ class StudioController extends GetxController {
   @override
   void onClose() {
     _debounce?.cancel();
+    _selectionPlaySub?.cancel();
     for (final StreamSubscription<dynamic> s in _subs) {
       s.cancel();
     }

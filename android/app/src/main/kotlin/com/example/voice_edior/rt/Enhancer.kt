@@ -61,11 +61,12 @@ object Enhancer {
         inPath: String, outPath: String, mode: String, tone: String = "natural", space: String = "dry",
         level: String = "enhanced",
         strength: Float = 1.0f,
+        customFx: VocalFx? = null,
         progress: (String, Float) -> Unit = { _, _ -> },
     ): EnhanceResult {
         val vocals = mode == "vocals"
         val effTone = if (!vocals && tone == "natural") "general_bass" else tone
-        val targetLufs = if (vocals) -14.0 else -16.0
+        val targetLufs = if (customFx != null && customFx.outputGainDb < -5.0f) customFx.outputGainDb.toDouble() else (if (vocals) -14.0 else -16.0)
         val fileLen = try { File(inPath).length() } catch (_: Throwable) { 0L }
         val fileMod = try { File(inPath).lastModified() } catch (_: Throwable) { 0L }
         val cacheKey = "$inPath|$fileLen|$fileMod|$vocals"
@@ -119,11 +120,11 @@ object Enhancer {
         val sr = cache.sr
         val info = cache.info
         val pass1 = cache.pass1
-        val fx = if (vocals) ModeFx.vocals(info, effTone, space) else ModeFx.podcast(effTone, level, info)
+        val fx = customFx ?: (if (vocals) ModeFx.vocals(info, effTone, space) else ModeFx.podcast(effTone, level, info))
 
         progress("Applying vocal filter & EQ", 0.56f)
         val chain = fx.copy(
-            denoise = if (vocals) 0.35f else if (effTone == "studio_booth" || effTone == "theatrical") 0.55f else 0.40f,
+            denoise = if (customFx != null) fx.denoise.coerceIn(0f, 1f) else (if (vocals) 0.35f else if (effTone == "studio_booth" || effTone == "theatrical") 0.55f else 0.40f),
             hpfHz = fx.hpfHz,
             gateOn = false,
             reverbMix = 0f,
@@ -139,6 +140,7 @@ object Enhancer {
         val cleanHold: Double
         val cleanRelease: Double
         when {
+            customFx != null -> { cleanDepth = 18.0; cleanMargin = 6.0; cleanHold = 90.0; cleanRelease = 140.0 }
             vocals -> { cleanDepth = 14.0; cleanMargin = 5.5; cleanHold = 140.0; cleanRelease = 200.0 }
             effTone == "studio_booth" -> { cleanDepth = 26.0; cleanMargin = 6.5; cleanHold = 70.0; cleanRelease = 110.0 }
             effTone == "theatrical" -> { cleanDepth = 22.0; cleanMargin = 6.0; cleanHold = 80.0; cleanRelease = 125.0 }
@@ -146,12 +148,9 @@ object Enhancer {
         }
         shaped = multibandSpectralGate(shaped, sr, cleanDepth, cleanMargin, cleanHold, cleanRelease)
 
-        val levelScale = when (level) {
-            "natural" -> 0.55f
-            "max" -> 1.25f
-            else -> 1.0f
-        }
-        val airAmount = if (vocals) {
+        val airAmount = if (customFx != null) {
+            fx.exciter.coerceIn(0f, 1f)
+        } else if (vocals) {
             when (effTone) {
                 "bright" -> 0.55f
                 "radio" -> 0.35f
@@ -161,6 +160,11 @@ object Enhancer {
                 else -> 0.25f
             }
         } else {
+            val levelScale = when (level) {
+                "natural" -> 0.55f
+                "max" -> 1.25f
+                else -> 1.0f
+            }
             levelScale * when (effTone) {
                 "crystal_treble" -> 0.65f
                 "bass_treble" -> 0.55f
@@ -176,12 +180,14 @@ object Enhancer {
         // Final clean: adaptive speech pause gate + downward expander after EQ/compression
         progress("Final clean", 0.74f)
         val pauseFloor = when {
+            customFx != null -> (fx.gateThresholdDb.toDouble() - 10.0).coerceIn(-70.0, -40.0)
             vocals -> -48.0
             effTone == "studio_booth" -> -64.0
             effTone == "theatrical" -> -62.0
             else -> -56.0
         }
         val pauseHold = when {
+            customFx != null -> 120.0
             vocals -> 140.0
             effTone == "studio_booth" -> 95.0
             effTone == "theatrical" -> 105.0
@@ -195,6 +201,7 @@ object Enhancer {
             lookMs = 15.0,
         )
         val gateMargin = when {
+            customFx != null -> 8.5
             vocals -> 7.5
             effTone == "studio_booth" -> 10.5
             effTone == "theatrical" -> 10.0
@@ -202,6 +209,7 @@ object Enhancer {
         }
         val gateDb = gateThresholdDb(pausedCleaned, sr, gateMargin)
         val gateDepth = when {
+            customFx != null -> fx.gateDepthDb.coerceIn(12f, 60f)
             vocals -> 34f
             effTone == "studio_booth" -> 52f
             effTone == "theatrical" -> 48f
@@ -218,10 +226,14 @@ object Enhancer {
             ),
         )
 
-        // Post-gate colour & acoustic space: exciter and (for Vocals only) reverb never touch silenced background noise
+        // Post-gate colour & acoustic space: exciter and reverb never touch silenced background noise
         if (fx.reverbMix > 0.001f || fx.exciter > 0.001f) {
             progress(if (fx.reverbMix > 0.001f) "Adding studio acoustic space" else "Enhancing vocal air", 0.84f)
-            val tailSec = if (vocals && fx.reverbMix > 0.001f) ModeFx.reverbTailSeconds(space) else 0.0
+            val tailSec = if (customFx != null) {
+                if (fx.reverbMix > 0.001f) (fx.reverbSize * 1.8).toDouble() else 0.0
+            } else if (vocals && fx.reverbMix > 0.001f) {
+                ModeFx.reverbTailSeconds(space)
+            } else 0.0
             val tail = (tailSec * sr).toInt()
             y = process(
                 y, sr,

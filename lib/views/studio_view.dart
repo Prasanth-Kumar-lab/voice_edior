@@ -5,6 +5,7 @@ import '../controllers/admin_controller.dart';
 import '../controllers/studio_controller.dart';
 import '../models/enhance_mode.dart';
 import '../models/podcast_presets.dart';
+import '../models/vocal_fx.dart';
 import '../models/vocal_presets.dart';
 import '../services/enhance_server.dart';
 import '../services/native_engine.dart';
@@ -13,6 +14,7 @@ import '../theme/app_radius.dart';
 import '../theme/app_spacing.dart';
 import '../utils/formatters.dart';
 import '../widgets/common/vp_buttons.dart';
+import '../widgets/common/vp_eq_canvas.dart';
 import '../widgets/common/vp_pro.dart';
 import '../widgets/common/vp_waveform.dart';
 
@@ -560,6 +562,11 @@ class _ResultPage extends StatelessWidget {
                     samples: (c.listenOriginal.value ? c.originalWave : c.enhancedWave).toList(),
                     height: 110,
                     progress: c.progressFraction,
+                    showTrim: c.showTrimmer.value,
+                    trimStart: c.trimStart.value,
+                    trimEnd: c.trimEnd.value,
+                    onTrimStart: c.setTrimStart,
+                    onTrimEnd: c.setTrimEnd,
                     onScrub: c.seek,
                   )),
               const SizedBox(height: AppSpacing.sm),
@@ -576,13 +583,24 @@ class _ResultPage extends StatelessWidget {
                   Obx(
                     () => FilterChip(
                       visualDensity: VisualDensity.compact,
-                      label: const Text('Match A/B Loudness', style: TextStyle(fontSize: 11)),
+                      avatar: Icon(Icons.crop_rounded, size: 14, color: c.showTrimmer.value ? Colors.white : AppColors.accentBright),
+                      label: const Text('Edit / Trim', style: TextStyle(fontSize: 11)),
+                      selected: c.showTrimmer.value,
+                      onSelected: (_) => c.toggleTrimmer(),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Obx(
+                    () => FilterChip(
+                      visualDensity: VisualDensity.compact,
+                      label: const Text('A/B Level', style: TextStyle(fontSize: 11)),
                       selected: c.loudnessMatchedAb.value,
                       onSelected: (v) => c.loudnessMatchedAb.value = v,
                     ),
                   ),
                 ],
               ),
+              _WaveformTrimmerBar(c),
               const SizedBox(height: AppSpacing.xs),
               Obx(
                 () => Row(
@@ -609,8 +627,20 @@ class _ResultPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: AppSpacing.md),
-        Obx(() => c.mode.value == EnhanceMode.vocals ? _VocalPickers(c, live: true) : _PodcastPickers(c, live: true)),
-        Obx(() => c.mode.value == EnhanceMode.podcast ? const _PodcastPromise(done: true) : const SizedBox.shrink()),
+        _StudioModeSwitcher(c),
+        const SizedBox(height: AppSpacing.sm),
+        Obx(() {
+          if (c.isAudacityMode.value) {
+            return _AudacityStudioPanel(c);
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              c.mode.value == EnhanceMode.vocals ? _VocalPickers(c, live: true) : _PodcastPickers(c, live: true),
+              if (c.mode.value == EnhanceMode.podcast) const _PodcastPromise(done: true),
+            ],
+          );
+        }),
         const SizedBox(height: AppSpacing.md),
         Obx(() {
           final EnhanceStats? s = c.stats.value;
@@ -651,6 +681,707 @@ class _ResultPage extends StatelessWidget {
   }
 
   static String _cap(String s) => s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+}
+
+class _StudioModeSwitcher extends StatelessWidget {
+  const _StudioModeSwitcher(this.c);
+  final StudioController c;
+
+  @override
+  Widget build(BuildContext context) {
+    final Brightness b = Theme.of(context).brightness;
+    final TextTheme t = Theme.of(context).textTheme;
+
+    return Obx(() {
+      final bool audacity = c.isAudacityMode.value;
+      return Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceAlt(b),
+          borderRadius: AppRadius.card,
+          border: Border.all(color: AppColors.border(b)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  if (audacity) c.toggleAudacityMode();
+                },
+                behavior: HitTestBehavior.opaque,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 240),
+                  curve: Curves.easeOutCubic,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    borderRadius: AppRadius.button,
+                    gradient: !audacity ? AppColors.signature : null,
+                  ),
+                  child: Center(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.auto_awesome_rounded,
+                          size: 16,
+                          color: !audacity ? Colors.white : AppColors.muted(b),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Quick Filters',
+                          style: t.labelLarge?.copyWith(
+                            color: !audacity ? Colors.white : AppColors.muted(b),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  if (!audacity) c.toggleAudacityMode();
+                },
+                behavior: HitTestBehavior.opaque,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 240),
+                  curve: Curves.easeOutCubic,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  decoration: BoxDecoration(
+                    borderRadius: AppRadius.button,
+                    gradient: audacity ? AppColors.signature : null,
+                  ),
+                  child: Center(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.graphic_eq_rounded,
+                          size: 16,
+                          color: audacity ? Colors.white : AppColors.muted(b),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Audacity Studio',
+                          style: t.labelLarge?.copyWith(
+                            color: audacity ? Colors.white : AppColors.muted(b),
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+}
+
+class _WaveformTrimmerBar extends StatelessWidget {
+  const _WaveformTrimmerBar(this.c);
+  final StudioController c;
+
+  @override
+  Widget build(BuildContext context) {
+    final Brightness b = Theme.of(context).brightness;
+    final TextTheme t = Theme.of(context).textTheme;
+
+    return Obx(() {
+      if (!c.showTrimmer.value) return const SizedBox.shrink();
+
+      final int dur = c.durationMs.value;
+      final int startMs = (dur * c.trimStart.value).round();
+      final int endMs = (dur * c.trimEnd.value).round();
+      final double selSec = ((endMs - startMs) / 1000.0).clamp(0.0, 9999.0);
+
+      return Container(
+        margin: const EdgeInsets.only(top: AppSpacing.sm),
+        padding: const EdgeInsets.all(AppSpacing.sm),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceAlt(b),
+          borderRadius: AppRadius.card,
+          border: Border.all(color: AppColors.accentBright.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.crop_rounded, size: 16, color: AppColors.accentBright),
+                const SizedBox(width: 6),
+                Text('Selection: ', style: t.labelSmall?.copyWith(color: AppColors.muted(b))),
+                Text(
+                  '${formatDuration(startMs)} – ${formatDuration(endMs)} (${selSec.toStringAsFixed(1)}s)',
+                  style: t.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                InkWell(
+                  onTap: c.restoreOriginalTake,
+                  borderRadius: AppRadius.chip,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.undo_rounded, size: 14, color: AppColors.muted(b)),
+                        const SizedBox(width: 4),
+                        Text('Revert', style: t.labelSmall?.copyWith(color: AppColors.muted(b))),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                _TrimmerActionButton(
+                  icon: Icons.play_arrow_rounded,
+                  label: 'Play Sel',
+                  onTap: c.playSelection,
+                ),
+                _TrimmerActionButton(
+                  icon: Icons.content_cut_rounded,
+                  label: 'Trim to Sel',
+                  onTap: c.trimToSelection,
+                ),
+                _TrimmerActionButton(
+                  icon: Icons.delete_outline_rounded,
+                  label: 'Cut Sel',
+                  onTap: c.deleteSelection,
+                ),
+                _TrimmerActionButton(
+                  icon: Icons.volume_off_rounded,
+                  label: 'Silence Sel',
+                  onTap: c.silenceSelection,
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    });
+  }
+}
+
+class _TrimmerActionButton extends StatelessWidget {
+  const _TrimmerActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final Brightness b = Theme.of(context).brightness;
+    final TextTheme t = Theme.of(context).textTheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: AppRadius.chip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: AppColors.surface(b),
+          borderRadius: AppRadius.chip,
+          border: Border.all(color: AppColors.border(b)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: AppColors.accentBright),
+            const SizedBox(width: 5),
+            Text(label, style: t.labelSmall?.copyWith(fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AudacityStudioPanel extends StatefulWidget {
+  const _AudacityStudioPanel(this.c);
+  final StudioController c;
+
+  @override
+  State<_AudacityStudioPanel> createState() => _AudacityStudioPanelState();
+}
+
+class _AudacityStudioPanelState extends State<_AudacityStudioPanel> {
+  int _activeTab = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final Brightness b = Theme.of(context).brightness;
+    final TextTheme t = Theme.of(context).textTheme;
+    final StudioController c = widget.c;
+
+    const List<String> tabTitles = ['8-Band EQ', 'Noise & Gate', 'Dynamics', 'Color & Space', 'Mastering'];
+    const List<IconData> tabIcons = [
+      Icons.equalizer_rounded,
+      Icons.hearing_rounded,
+      Icons.compress_rounded,
+      Icons.waves_rounded,
+      Icons.tune_rounded,
+    ];
+
+    return VpCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: const BoxDecoration(
+                  borderRadius: AppRadius.chip,
+                  gradient: AppColors.signature,
+                ),
+                child: const Icon(Icons.graphic_eq_rounded, size: 16, color: Colors.white),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Audacity Pro Studio DSP', style: t.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                    Text('Zero-latency on-device sound shaping', style: t.labelSmall?.copyWith(color: AppColors.muted(b))),
+                  ],
+                ),
+              ),
+              Obx(() => c.rendering.value
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : TextButton(
+                      onPressed: c.resetCustomFx,
+                      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                      child: const Text('Reset All', style: TextStyle(fontSize: 12)),
+                    )),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          // Sub-tabs
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (int i = 0; i < tabTitles.length; i++)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      avatar: Icon(
+                        tabIcons[i],
+                        size: 14,
+                        color: _activeTab == i ? Colors.white : AppColors.accentBright,
+                      ),
+                      label: Text(tabTitles[i], style: const TextStyle(fontSize: 11.5)),
+                      selected: _activeTab == i,
+                      onSelected: (selected) {
+                        if (selected) setState(() => _activeTab = i);
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            child: KeyedSubtree(
+              key: ValueKey<int>(_activeTab),
+              child: switch (_activeTab) {
+                0 => _buildEqTab(context, c),
+                1 => _buildNoiseTab(context, c),
+                2 => _buildDynamicsTab(context, c),
+                3 => _buildColorTab(context, c),
+                _ => _buildMasteringTab(context, c),
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEqTab(BuildContext context, StudioController c) {
+    final Brightness b = Theme.of(context).brightness;
+    final TextTheme t = Theme.of(context).textTheme;
+
+    return Obx(() {
+      final List<double> gains = c.customFx.value.eqGains;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('Parametric Curve Canvas', style: t.labelMedium?.copyWith(fontWeight: FontWeight.w700)),
+              const Spacer(),
+              TextButton(
+                onPressed: () {
+                  for (int i = 0; i < 8; i++) {
+                    c.setCustomBandGain(i, 0.0);
+                  }
+                },
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                child: const Text('Flatten EQ', style: TextStyle(fontSize: 11)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          VpEqCanvas(
+            bandGainsDb: gains,
+            bandFreqsHz: VocalFx.kEqFrequencies,
+            bandLabels: VocalFx.kEqLabels,
+            onBandChanged: c.setCustomBandGain,
+            height: 126,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Interactive node EQ: Drag points up/down on the canvas or tweak sliders below:',
+            style: t.bodySmall?.copyWith(color: AppColors.muted(b), fontSize: 11),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          for (int i = 0; i < VocalFx.kEqFrequencies.length; i++)
+            _DspSliderRow(
+              label: '${VocalFx.kEqLabels[i]} (${VocalFx.kEqRoleLabels[i]})',
+              valueText: '${gains[i] >= 0 ? '+' : ''}${gains[i].toStringAsFixed(1)} dB',
+              value: gains[i],
+              min: -12.0,
+              max: 12.0,
+              divisions: 48,
+              onChanged: (val) => c.setCustomBandGain(i, val),
+            ),
+        ],
+      );
+    });
+  }
+
+  Widget _buildNoiseTab(BuildContext context, StudioController c) {
+    return Obx(() {
+      final VocalFx fx = c.customFx.value;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _DspSliderRow(
+            label: 'Spectral Wiener Denoise',
+            sublabel: 'Audacity spectral subtractive background suppression',
+            valueText: '${(fx.denoise * 100).round()}%',
+            value: fx.denoise,
+            min: 0.0,
+            max: 1.0,
+            divisions: 20,
+            onChanged: c.setCustomDenoise,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'High-Pass Rumble Cut',
+            sublabel: 'Steep Butterworth filter cutting sub-rumble below cutoff',
+            valueText: '${fx.hpfHz.round()} Hz',
+            value: fx.hpfHz,
+            min: 20.0,
+            max: 200.0,
+            divisions: 36,
+            onChanged: c.setCustomHighPass,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'Noise Gate Threshold',
+            sublabel: 'Silences audio when voice pauses between spoken words',
+            valueText: '${fx.gateThresholdDb.round()} dB',
+            value: fx.gateThresholdDb,
+            min: -60.0,
+            max: -10.0,
+            divisions: 50,
+            onChanged: c.setCustomGateThreshold,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'Gate Reduction Depth',
+            sublabel: 'Maximum attenuation applied when the gate is closed',
+            valueText: '${fx.gateDepthDb.round()} dB',
+            value: fx.gateDepthDb,
+            min: -60.0,
+            max: -6.0,
+            divisions: 54,
+            onChanged: c.setCustomGateDepth,
+          ),
+        ],
+      );
+    });
+  }
+
+  Widget _buildDynamicsTab(BuildContext context, StudioController c) {
+    return Obx(() {
+      final VocalFx fx = c.customFx.value;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _DspSliderRow(
+            label: 'Compressor Threshold',
+            sublabel: 'Level above which dynamic leveling and gain reduction kicks in',
+            valueText: '${fx.compThresholdDb.round()} dB',
+            value: fx.compThresholdDb,
+            min: -40.0,
+            max: 0.0,
+            divisions: 40,
+            onChanged: (v) => c.setCustomCompressor(thresholdDb: v),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'Compressor Ratio',
+            sublabel: 'Amount of dynamic smoothing applied to loud vocal passages',
+            valueText: '${fx.compRatio.toStringAsFixed(1)}:1',
+            value: fx.compRatio,
+            min: 1.0,
+            max: 10.0,
+            divisions: 45,
+            onChanged: (v) => c.setCustomCompressor(ratio: v),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'Makeup Gain',
+            sublabel: 'Restores punch and presence after peak attenuation',
+            valueText: '+${fx.compMakeupDb.toStringAsFixed(1)} dB',
+            value: fx.compMakeupDb,
+            min: 0.0,
+            max: 15.0,
+            divisions: 30,
+            onChanged: (v) => c.setCustomCompressor(makeupDb: v),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'De-Esser (Sibilance Control)',
+            sublabel: 'Tames harsh \'S\', \'Sh\', and \'T\' microphone peaks around 6.5kHz',
+            valueText: '${(fx.deEss * 100).round()}%',
+            value: fx.deEss,
+            min: 0.0,
+            max: 1.0,
+            divisions: 20,
+            onChanged: c.setCustomDeEss,
+          ),
+        ],
+      );
+    });
+  }
+
+  Widget _buildColorTab(BuildContext context, StudioController c) {
+    return Obx(() {
+      final VocalFx fx = c.customFx.value;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _DspSliderRow(
+            label: 'Tube Warmth & Saturation',
+            sublabel: 'Analog odd/even harmonic body and richness (Audacity Tape drive)',
+            valueText: '${(fx.warmth * 100).round()}%',
+            value: fx.warmth,
+            min: 0.0,
+            max: 1.0,
+            divisions: 20,
+            onChanged: c.setCustomWarmth,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'Harmonic Exciter (Air)',
+            sublabel: 'High-frequency broadcast sparkle and crystalline sheen',
+            valueText: '${(fx.exciter * 100).round()}%',
+            value: fx.exciter,
+            min: 0.0,
+            max: 1.0,
+            divisions: 20,
+            onChanged: c.setCustomExciter,
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'Studio Reverb Mix',
+            sublabel: 'Acoustic room depth and stereo ambient reverberation',
+            valueText: '${(fx.reverbMix * 100).round()}%',
+            value: fx.reverbMix,
+            min: 0.0,
+            max: 0.5,
+            divisions: 25,
+            onChanged: (v) => c.setCustomReverb(mix: v),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'Reverb Room Size',
+            sublabel: 'Simulates small vocal booth up to spacious recording hall',
+            valueText: '${(fx.reverbSize * 100).round()}%',
+            value: fx.reverbSize,
+            min: 0.0,
+            max: 1.0,
+            divisions: 20,
+            onChanged: (v) => c.setCustomReverb(size: v),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          _DspSliderRow(
+            label: 'Reverb High Damping',
+            sublabel: 'Dampens high reflection frequencies for warmer space',
+            valueText: '${(fx.reverbDamp * 100).round()}%',
+            value: fx.reverbDamp,
+            min: 0.0,
+            max: 1.0,
+            divisions: 20,
+            onChanged: (v) => c.setCustomReverb(damp: v),
+          ),
+        ],
+      );
+    });
+  }
+
+  Widget _buildMasteringTab(BuildContext context, StudioController c) {
+    return Obx(() {
+      final VocalFx fx = c.customFx.value;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _DspSliderRow(
+            label: 'Broadcast Target Loudness',
+            sublabel: 'EBU R128 / ITU-R BS.1770 standard loudness normalization',
+            valueText: '${fx.targetLufs.toStringAsFixed(1)} LUFS',
+            value: fx.targetLufs,
+            min: -24.0,
+            max: -10.0,
+            divisions: 28,
+            onChanged: c.setCustomTargetLufs,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              ActionChip(
+                label: const Text('Podcast (-16 LUFS)', style: TextStyle(fontSize: 11)),
+                onPressed: () => c.setCustomTargetLufs(-16.0),
+              ),
+              ActionChip(
+                label: const Text('Streaming Vocals (-14 LUFS)', style: TextStyle(fontSize: 11)),
+                onPressed: () => c.setCustomTargetLufs(-14.0),
+              ),
+              ActionChip(
+                label: const Text('Club Master (-12 LUFS)', style: TextStyle(fontSize: 11)),
+                onPressed: () => c.setCustomTargetLufs(-12.0),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Container(
+            padding: const EdgeInsets.all(AppSpacing.sm),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceAlt(Theme.of(context).brightness),
+              borderRadius: AppRadius.card,
+              border: Border.all(color: AppColors.border(Theme.of(context).brightness)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.shield_rounded, size: 18, color: AppColors.success),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'True-Peak Brickwall Limiter Enabled',
+                        style: Theme.of(context).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        'Guarantees -1.0 dBFS ceiling with zero digital clipping distortion',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 10.5),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    });
+  }
+}
+
+class _DspSliderRow extends StatelessWidget {
+  const _DspSliderRow({
+    required this.label,
+    required this.valueText,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+    this.divisions,
+    this.sublabel,
+  });
+
+  final String label;
+  final String valueText;
+  final double value;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+  final int? divisions;
+  final String? sublabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final Brightness b = Theme.of(context).brightness;
+    final TextTheme t = Theme.of(context).textTheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: t.labelMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                borderRadius: AppRadius.chip,
+                color: AppColors.surfaceAlt(b),
+                border: Border.all(color: AppColors.border(b)),
+              ),
+              child: Text(
+                valueText,
+                style: t.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.accentBright,
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (sublabel != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              sublabel!,
+              style: t.bodySmall?.copyWith(color: AppColors.muted(b), fontSize: 10.5),
+            ),
+          ),
+        Slider(
+          value: value.clamp(min, max),
+          min: min,
+          max: max,
+          divisions: divisions,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
 }
 
 class _Chip extends StatelessWidget {
@@ -722,7 +1453,6 @@ class _Segmented extends StatelessWidget {
     );
   }
 }
-
 
 // ───────────────────────────── step bar ─────────────────────────────
 

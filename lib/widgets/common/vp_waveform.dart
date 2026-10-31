@@ -180,6 +180,7 @@ class WaveformPainter extends CustomPainter {
       old.samples != samples ||
       old.progress != progress ||
       old.live != live ||
+      old.showTrim != showTrim ||
       old.trimStart != trimStart ||
       old.trimEnd != trimEnd;
 }

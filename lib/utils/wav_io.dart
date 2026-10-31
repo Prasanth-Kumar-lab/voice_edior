@@ -141,6 +141,54 @@ class WavIo {
     );
   }
 
+  static WavData crop(WavData wav, int startMs, int endMs) => trim(wav, startMs, endMs);
+
+  /// Deletes the selected range [startMs .. endMs] and splices the remaining audio (Audacity Cut / Delete).
+  static WavData deleteRange(WavData wav, int startMs, int endMs) {
+    final int start = ((startMs / 1000) * wav.sampleRate).round().clamp(0, wav.frames - 1);
+    final int end = ((endMs / 1000) * wav.sampleRate).round().clamp(start, wav.frames);
+    final int ch = wav.channels;
+    final int cutFrames = end - start;
+    if (cutFrames <= 0) return wav;
+    final int remaining = wav.frames - cutFrames;
+    if (remaining <= 0) return trim(wav, 0, min(100, wav.durationMs));
+    final Float64List s = Float64List(remaining * ch);
+    final int beforeLen = start * ch;
+    for (int i = 0; i < beforeLen; i++) {
+      s[i] = wav.samples[i];
+    }
+    final int afterStart = end * ch;
+    final int afterLen = (wav.frames - end) * ch;
+    for (int i = 0; i < afterLen; i++) {
+      s[beforeLen + i] = wav.samples[afterStart + i];
+    }
+    return WavData(
+      sampleRate: wav.sampleRate,
+      channels: ch,
+      bitsPerSample: wav.bitsPerSample,
+      samples: s,
+    );
+  }
+
+  /// Sets the selected range [startMs .. endMs] to zero amplitude (Audacity Silence Audio).
+  static WavData silenceRange(WavData wav, int startMs, int endMs) {
+    final int start = ((startMs / 1000) * wav.sampleRate).round().clamp(0, wav.frames - 1);
+    final int end = ((endMs / 1000) * wav.sampleRate).round().clamp(start, wav.frames);
+    final int ch = wav.channels;
+    final Float64List s = Float64List.fromList(wav.samples);
+    final int sIdx = start * ch;
+    final int eIdx = end * ch;
+    for (int i = sIdx; i < eIdx && i < s.length; i++) {
+      s[i] = 0.0;
+    }
+    return WavData(
+      sampleRate: wav.sampleRate,
+      channels: ch,
+      bitsPerSample: wav.bitsPerSample,
+      samples: s,
+    );
+  }
+
   static WavData fade(WavData wav, {int fadeInMs = 40, int fadeOutMs = 80}) {
     final Float64List s = Float64List.fromList(wav.samples);
     final int ch = wav.channels;
