@@ -138,7 +138,8 @@ def enhance_podcast(x_in: np.ndarray, sr: int, cb: Progress = _noop, tone: str =
     x = pl.apply_speech_gate(x, SR, pause_floor_db=-60.0, hold_ms=130.0, look_ms=15.0)
 
     sp_type = str(tcfg.get("space", "theatre" if tcfg.get("theatre") else ""))
-    if sp_type == "theatre":
+    if sp_type:
+        cb("Cinema-hall depth" if sp_type == "theatre" else "Studio acoustic space", 0.88)
         x = pl.podcast_space(x, sp_type, SR)
         report["stereo"] = True
 
@@ -210,8 +211,9 @@ def enhance_vocals(x_in: np.ndarray, sr: int, cb: Progress = _noop, eq: str = "n
     report.update({"compressor_ratio": round(ratio, 1), "compressor_peak_gr_db": round(gr, 1)})
 
     cb("Final clean", 0.84)
-    x = pl.spectral_gate(x, depth_db=20.0, margin_db=6.0, hold_ms=140.0, release_ms=260.0, voiced=voiced)
-    x = pl.dominant_expander(x, rel_db=-28.0, depth_db=10.0)
+    x = pl.spectral_gate(x, depth_db=28.0, margin_db=5.5, hold_ms=130.0, release_ms=220.0, voiced=voiced)
+    x = pl.dominant_expander(x, rel_db=-24.0, depth_db=16.0)
+    x = pl.apply_speech_gate(x, SR, pause_floor_db=-52.0, hold_ms=145.0, look_ms=16.0)
 
     cb("Adding polish", 0.88)
     x = pl.warmth(x, prof["warmth"])
@@ -353,8 +355,9 @@ def style_from_cache(
         x = pl.level(x, SR, target_db=-21.0, max_up=7.0, max_down=6.0)
         x, gr = pl.compress(x, SR, thr_db=-24.0, ratio=2.8, attack_ms=10, release_ms=130)
         report["compressor_peak_gr_db"] = round(gr, 1)
-        x = pl.spectral_gate(x, depth_db=20.0, margin_db=6.0, hold_ms=140.0, release_ms=260.0, voiced=voiced)
-        x = pl.dominant_expander(x, rel_db=-28.0, depth_db=10.0)
+        x = pl.spectral_gate(x, depth_db=28.0, margin_db=5.5, hold_ms=130.0, release_ms=220.0, voiced=voiced)
+        x = pl.dominant_expander(x, rel_db=-24.0, depth_db=16.0)
+        x = pl.apply_speech_gate(x, SR, pause_floor_db=-52.0, hold_ms=145.0, look_ms=16.0)
         x = pl.warmth(x, prof["warmth"])
         x = pl.apply_space(x, space_cfg(space), SR)
         x = ld.normalize_lufs(x, -14.0, ceiling_db=-1.0)
@@ -388,7 +391,7 @@ def style_from_cache(
         x = pl.dominant_expander(x, rel_db=-22.0, depth_db=20.0)
         x = pl.apply_speech_gate(x, SR, pause_floor_db=-60.0, hold_ms=130.0, look_ms=15.0)
         sp_type = str(tcfg.get("space", "theatre" if tcfg.get("theatre") else ""))
-        if sp_type == "theatre":
+        if sp_type:
             x = pl.podcast_space(x, sp_type, SR)
             report["stereo"] = True
         x = ld.normalize_lufs(x, -16.0, ceiling_db=-1.0)

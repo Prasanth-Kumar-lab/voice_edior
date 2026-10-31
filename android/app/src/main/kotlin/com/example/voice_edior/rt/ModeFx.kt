@@ -7,19 +7,19 @@ import com.example.voice_edior.dsp.VocalFx
 object ModeFx {
     /** Podcast voice filters, added band by band to the speech base EQ (60, 150, 400, 1k, 2.4k, 5k, 8k, 12k Hz). */
     private val podcastTones = mapOf(
-        // Studio Clarity: pure, clean broadcast voice without bass boom or harshness (flat 150 Hz fundamental)
-        "general_bass" to floatArrayOf(0.0f, 1.5f, -1.0f, 0.5f, 2.0f, 1.5f, 1.0f, 0.5f),
-        // Theatrical + Bass: warm, deep natural studio bass + clear voice (only filter with bass boost)
-        "theatrical" to floatArrayOf(5.0f, 5.5f, -2.0f, 0.0f, 2.0f, 1.2f, -0.5f, -1.0f),
-        // Crisp Air & Detail: clean high-definition consonant detail without bass boost
-        "bass_treble" to floatArrayOf(-1.0f, 1.5f, -1.5f, 0.5f, 2.5f, 3.0f, 2.5f, 2.0f),
-        // Warm Intimate: smooth, warm close-mic midrange presence without sub-bass boom
-        "ultra_bass" to floatArrayOf(0.0f, 2.0f, 1.5f, 0.5f, 0.5f, -1.0f, -2.0f, -2.5f),
-        // Crystal Presence: forward vocal articulation and studio condenser clarity
-        "crystal_treble" to floatArrayOf(-2.0f, 0.5f, -1.5f, 1.5f, 3.5f, 3.5f, 3.0f, 2.5f),
-        // Studio Booth: balanced, treated studio booth clarity
-        "studio_booth" to floatArrayOf(-0.5f, 1.5f, -1.0f, 1.0f, 2.2f, 2.0f, 1.5f, 1.0f),
-        "studio" to floatArrayOf(0.0f, 1.5f, -1.0f, 0.5f, 2.0f, 1.5f, 1.0f, 0.5f),
+        // Studio Clarity: neutral, articulate broadcast microphone (zero bass boom, crisp presence)
+        "general_bass" to floatArrayOf(-3.0f, 1.5f, -1.5f, 1.0f, 2.5f, 2.5f, 2.0f, 1.5f),
+        // Theatrical + Bass: deep movie-trailer chest & sub-bass + cinema-hall depth (only filter with bass boost)
+        "theatrical" to floatArrayOf(11.0f, 8.5f, -2.5f, 0.0f, 2.5f, 1.5f, -1.0f, -2.0f),
+        // Crisp Air & Detail: modern HD creator sound — open, sparkling high-definition top end
+        "bass_treble" to floatArrayOf(-4.0f, 0.5f, -2.0f, 0.5f, 3.5f, 5.0f, 5.5f, 5.5f),
+        // Warm Intimate: late-night radio — warm low-mid body, analog tube colour, smooth velvety top
+        "ultra_bass" to floatArrayOf(-1.0f, 3.5f, 3.5f, 1.5f, 0.0f, -3.5f, -5.0f, -6.5f),
+        // Crystal Presence: maximum forward projection — tight low cut, cuts through any phone speaker
+        "crystal_treble" to floatArrayOf(-5.0f, -2.5f, -2.5f, 2.5f, 5.0f, 5.0f, 4.0f, 3.5f),
+        // Studio Booth: acoustically treated booth — balanced voice with short studio early reflections
+        "studio_booth" to floatArrayOf(-2.0f, 2.0f, -1.0f, 1.5f, 2.5f, 2.5f, 2.0f, 2.0f),
+        "studio" to floatArrayOf(-3.0f, 1.5f, -1.5f, 1.0f, 2.5f, 2.5f, 2.0f, 1.5f),
     )
 
     /** Enhance level: exciter amount, compressor ratio, extra presence (dB at 2.4k / 5k). */
@@ -27,57 +27,78 @@ object ModeFx {
 
     private val levels = mapOf(
         "natural" to Level(0f, 2.0f, 0f, 0f),
-        "enhanced" to Level(0.35f, 2.4f, 1.5f, 0.8f),
-        "max" to Level(0.55f, 2.8f, 2.5f, 1.5f),
+        "enhanced" to Level(0.4f, 2.4f, 1.5f, 1.0f),
+        "max" to Level(0.6f, 2.8f, 2.5f, 2.0f),
     )
 
-    /** Broadcast speech: clean noise removal, natural studio EQ, smooth dynamics, zero artificial editor effects. */
+    /** Broadcast speech: deep noise removal, intelligibility EQ, tight dynamics, then the chosen voice filter + level. */
     fun podcast(
         tone: String = "general_bass",
         level: String = "enhanced",
         info: VoiceInfo? = null,
     ): VocalFx {
-        val base = floatArrayOf(-5f, -1.5f, -2.5f, 0.5f, 2.5f, 1.2f, -1.0f, 0.5f)
+        val base = floatArrayOf(-5f, -1.5f, -2.5f, 0.5f, 3.0f, 1.5f, -1.5f, 1.5f)
         val off = podcastTones[tone] ?: podcastTones.getValue("general_bass")
         val lv = levels[level] ?: levels.getValue("enhanced")
         val gains = FloatArray(8) { base[it] + off[it] }
         if (tone == "theatrical") {
-            gains[1] += lv.body
-            gains[2] += lv.body * 0.4f
+            gains[0] += lv.body * 1.5f
+            gains[1] += lv.body * 1.5f
         } else {
-            gains[2] += lv.body * 0.3f
+            gains[2] += lv.body * 0.4f
+            gains[4] += lv.presence
+            gains[5] += lv.presence * 0.8f
+            gains[6] += lv.presence * 0.3f
         }
-        gains[4] += lv.presence; gains[5] += lv.presence * 0.8f; gains[6] += lv.presence * 0.3f
+        val revMix = when (tone) {
+            "theatrical" -> 0.22f
+            "studio_booth" -> 0.14f
+            else -> 0f
+        }
+        val revSize = if (tone == "theatrical") 0.82f else 0.35f
+        val revDamp = if (tone == "theatrical") 0.62f else 0.45f
+        val revPre = if (tone == "theatrical") 26f else 14f
         val warmAmt = when (tone) {
-            "ultra_bass" -> 0.18f
-            "theatrical" -> 0.15f
-            "studio_booth" -> 0.12f
-            else -> 0.08f
+            "ultra_bass" -> 0.32f
+            "theatrical" -> 0.22f
+            "studio_booth" -> 0.16f
+            else -> 0.10f
         }
         val exAmt = when (tone) {
-            "crystal_treble" -> (lv.exciter + 0.15f).coerceAtMost(0.65f)
-            "bass_treble" -> (lv.exciter + 0.10f).coerceAtMost(0.60f)
+            "crystal_treble" -> (lv.exciter + 0.35f).coerceAtMost(0.90f)
+            "bass_treble" -> (lv.exciter + 0.30f).coerceAtMost(0.85f)
             "ultra_bass" -> 0f
+            "theatrical" -> (lv.exciter * 0.6f)
             else -> lv.exciter
         }
-        val hpf = if (tone == "theatrical") 60f else 75f
+        val compRatio = when (tone) {
+            "crystal_treble" -> (lv.ratio + 0.6f).coerceAtMost(3.6f)
+            "ultra_bass" -> (lv.ratio + 0.4f).coerceAtMost(3.4f)
+            else -> lv.ratio
+        }
+        val hpf = when (tone) {
+            "theatrical" -> 50f
+            "crystal_treble" -> 105f
+            "bass_treble" -> 90f
+            else -> 75f
+        }
         return VocalFx(
             hpfHz = hpf, denoise = 1.0f, gateOn = true, gateThresholdDb = -52f,
-            deEssOn = true, deEss = 0.7f, deEssHz = 6500f,
+            deEssOn = true, deEss = 0.75f, deEssHz = 6400f,
             eqOn = true, eqGains = gains,
-            compOn = true, compThresholdDb = -24f, compRatio = lv.ratio, compAttackMs = 10f, compReleaseMs = 170f, compMakeupDb = 0f,
-            warmth = warmAmt, exciter = exAmt, reverbMix = 0f, reverbSize = 0.35f, limiterCeilingDb = -1f,
+            compOn = true, compThresholdDb = -24f, compRatio = compRatio, compAttackMs = 10f, compReleaseMs = 170f, compMakeupDb = 0f,
+            warmth = warmAmt, exciter = exAmt, reverbMix = revMix, reverbSize = revSize, reverbDamp = revDamp, reverbPreMs = revPre, limiterCeilingDb = -1f,
         )
     }
 
     /** Tone presets are added, band by band, to the pitch-adaptive base EQ (60, 150, 400, 1k, 2.4k, 5k, 8k, 12k Hz). */
     private val tones = mapOf(
         "natural" to floatArrayOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f),
-        "smooth" to floatArrayOf(0f, 0.5f, 0.5f, 0f, -1.5f, -2f, -1.5f, -0.5f),
-        "warm" to floatArrayOf(0f, 2.0f, 1.5f, 0f, -0.5f, -1.5f, -2f, -2.5f),
-        "bright" to floatArrayOf(0f, -0.5f, -1f, 0f, 1.5f, 2.2f, 2.0f, 2.0f),
-        "deep" to floatArrayOf(1.5f, 2.5f, 1.5f, 0f, 0.3f, 0f, -0.5f, -1f),
-        "radio" to floatArrayOf(-3f, -1.5f, 0f, 1.5f, 2.8f, 1f, -1.5f, -3f),
+        "smooth" to floatArrayOf(0f, 1.5f, 1.5f, 0.5f, -2.5f, -3.5f, -3.0f, -2.0f),
+        "warm" to floatArrayOf(1.5f, 4.0f, 3.0f, 1.0f, -1.0f, -2.5f, -3.5f, -4.0f),
+        "bright" to floatArrayOf(-2.0f, -1.5f, -2.0f, 0.5f, 3.0f, 4.5f, 5.0f, 5.5f),
+        "deep" to floatArrayOf(4.5f, 5.5f, 2.5f, 0.0f, 0.5f, -1.0f, -2.0f, -2.5f),
+        "radio" to floatArrayOf(-5.0f, -3.0f, -1.0f, 3.0f, 5.0f, 3.0f, -2.0f, -4.5f),
     )
 
     /** Space presets: reverb mix, size, damping, pre-delay. */
@@ -85,10 +106,10 @@ object ModeFx {
 
     private val spaces = mapOf(
         "dry" to Space(0f, 0.5f, 0.5f, 20f),
-        "room" to Space(0.10f, 0.3f, 0.45f, 12f),
-        "plate" to Space(0.14f, 0.5f, 0.4f, 22f),
-        "hall" to Space(0.18f, 0.75f, 0.55f, 35f),
-        "wide" to Space(0.15f, 0.55f, 0.4f, 18f),
+        "room" to Space(0.16f, 0.35f, 0.40f, 14f),
+        "plate" to Space(0.24f, 0.60f, 0.30f, 22f),
+        "hall" to Space(0.30f, 0.88f, 0.50f, 35f),
+        "wide" to Space(0.26f, 0.65f, 0.30f, 18f),
     )
 
     fun reverbTailSeconds(space: String): Double = when (space) { "dry" -> 0.0; "room" -> 0.8; "hall" -> 2.4; else -> 1.6 }
@@ -96,19 +117,29 @@ object ModeFx {
     fun vocals(v: VoiceInfo, tone: String = "natural", space: String = "dry"): VocalFx {
         val f0 = if (v.f0Median > 0f) v.f0Median else 180f
         val p10 = if (v.f0P10 > 0f) v.f0P10 else f0 * 0.8f
-        val hpf = (0.55f * p10).coerceIn(60f, 140f)
+        val hpf = if (tone == "deep") 55f else (0.55f * p10).coerceIn(60f, 140f)
         val mudCut = if (f0 < 150f) -3.0f else -2.2f           // low voices carry more 250–400 Hz build-up
-        val presence = if (f0 < 200f) 2.8f else 2.0f
-        val air = if (f0 < 200f) 1.2f else 1.8f
+        val presence = if (f0 < 200f) 3.0f else 2.2f
+        val air = if (f0 < 200f) 1.5f else 2.2f
         val base = floatArrayOf(-6f, -1.0f, mudCut, 0.0f, presence, 0.8f, -1.5f, air)
         val off = tones[tone] ?: tones.getValue("natural")
         val sp = spaces[space] ?: spaces.getValue("dry")
+        val warmAmt = when (tone) {
+            "warm", "deep" -> 0.26f
+            "smooth" -> 0.20f
+            else -> if (f0 > 200f) 0.12f else 0.18f
+        }
+        val exAmt = when (tone) {
+            "bright" -> 0.45f
+            "radio" -> 0.25f
+            else -> 0.12f
+        }
         return VocalFx(
-            hpfHz = hpf, denoise = 0.9f, gateOn = true, gateThresholdDb = -58f,
-            deEssOn = true, deEss = 0.7f, deEssHz = (5200f + 7f * f0).coerceIn(5500f, 8500f),
+            hpfHz = hpf, denoise = 1.0f, gateOn = true, gateThresholdDb = -55f,
+            deEssOn = true, deEss = 0.75f, deEssHz = (5200f + 7f * f0).coerceIn(5500f, 8500f),
             eqOn = true, eqGains = FloatArray(8) { base[it] + off[it] },
             compOn = true, compThresholdDb = -22f, compRatio = 3.0f, compAttackMs = 10f, compReleaseMs = 150f, compMakeupDb = 0f,
-            warmth = if (f0 > 200f) 0.10f else 0.16f,
+            warmth = warmAmt, exciter = exAmt,
             reverbMix = sp.mix, reverbSize = sp.size, reverbDamp = sp.damp, reverbPreMs = sp.pre, limiterCeilingDb = -1f,
         )
     }

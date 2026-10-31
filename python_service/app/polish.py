@@ -406,42 +406,56 @@ def parallel_compress(x: np.ndarray, sr: int = 48000, amount: float = 0.25) -> n
 
 
 def voice_bass(x: np.ndarray, f0: float, sr: int = 48000, amount: float = 0.6) -> np.ndarray:
-    """Natural speech-following bass: tuned to the speaker's own pitch and driven by how they speak.
+    """Speech-following movie-trailer bass: tuned to the speaker's own pitch and driven by how they speak.
 
-    Uses smooth resonant low-end reinforcement around the speaker's fundamental and warm chest band
-    without any zero-crossing square-wave synthesizer buzz.
+    Uses smooth full-wave rectified even-order sub-bass reinforcement + fundamental chest resonance
+    scaled by the voice envelope so bass swells on spoken words and is silent in pauses.
     """
     if amount <= 0.01 or len(x) < sr // 10:
         return x
     f0 = float(np.clip(f0 or 140.0, 70.0, 300.0))
-    lo, hi = max(55.0, f0 * 0.65), min(320.0, f0 * 1.9)
+    lo, hi = max(50.0, f0 * 0.65), min(320.0, f0 * 2.0)
     sos = butter(3, [lo / (sr / 2), hi / (sr / 2)], "bandpass", output="sos")
     fund = sosfiltfilt(sos, x).astype(np.float32)
 
     env_sos = butter(2, 16.0 / (sr / 2), "lowpass", output="sos")
     env = np.maximum(sosfiltfilt(env_sos, np.abs(x)), 0.0).astype(np.float32)
     ref = float(np.percentile(env, 95)) + 1e-9
-    drive = np.clip(env / ref, 0.0, 1.3)
+    drive = np.clip((env - 0.08 * ref) / (0.70 * ref), 0.0, 1.35)
 
-    chest = fund * (0.95 * amount) * drive
-    return (x + chest).astype(np.float32)
+    # Continuous C0 octave-down sub-harmonic wave (fund * div_sign flips at zero crossings -> zero step buzz)
+    zc = (fund[:-1] <= 0) & (fund[1:] > 0)
+    div_sign = (1 - 2 * (np.cumsum(np.concatenate([[0], zc.astype(np.int32)])) & 1)).astype(np.float32)
+    sub_raw = fund * div_sign
+    sub_sos = butter(4, min(f0 * 0.90, 145.0) / (sr / 2), "lowpass", output="sos")
+    sub = sosfiltfilt(sub_sos, sub_raw).astype(np.float32)
+    sub = highpass(sub, 40.0, sr)
+
+    active = env > 0.1 * ref
+    voice_rms = float(np.sqrt(np.mean(x[active] ** 2) + 1e-12)) if np.any(active) else 0.05
+    sub_rms = float(np.sqrt(np.mean(sub[active] ** 2) + 1e-12)) if np.any(active) else float(np.sqrt(np.mean(sub ** 2) + 1e-12))
+    chest = fund * (1.55 * amount) * drive
+    sub_layer = sub * (0.90 * amount * voice_rms / sub_rms) * drive
+    sat_ref = max(1e-4, voice_rms * 1.15)
+    fat_bass = np.tanh((chest + sub_layer) / sat_ref) * sat_ref
+    dry_blend = 1.0 - 0.18 * min(amount, 1.2)
+    return (x * dry_blend + fat_bass).astype(np.float32)
 
 
 def theatre_space(x: np.ndarray, sr: int = 48000, mix_db: float = -20.0) -> np.ndarray:
-    """Clean stereo presentation for Theatrical + Bass without artificial room echo or Haas delay."""
-    if x.ndim == 2:
-        return x.astype(np.float32)
-    return np.column_stack([x, x]).astype(np.float32)
+    """Dark, wide cinema-hall ambience behind the voice (stereo). Applied after the pause gate, so only the
+    voice itself rings into the room – the background noise never does."""
+    return apply_space(x, {"t60": 1.45, "pre": 26.0, "mix": -18.5, "damp": 0.65, "width": 0.85}, sr)
 
 
 def voice_treble(x: np.ndarray, sr: int = 48000, amount: float = 0.6) -> np.ndarray:
-    """Speech-following high-definition articulation & air shaper (2.8–11 kHz)."""
+    """Speech-following high-definition articulation & air shaper (2.8–12 kHz)."""
     if amount <= 0.01 or len(x) < sr // 10:
         return x
     sos_pres = butter(2, [2800.0 / (sr / 2), 6200.0 / (sr / 2)], "bandpass", output="sos")
     pres = sosfiltfilt(sos_pres, x).astype(np.float32)
 
-    sos_air = butter(2, [6200.0 / (sr / 2), 11500.0 / (sr / 2)], "bandpass", output="sos")
+    sos_air = butter(2, [6200.0 / (sr / 2), 12000.0 / (sr / 2)], "bandpass", output="sos")
     air = sosfiltfilt(sos_air, x).astype(np.float32)
 
     env_sos = butter(2, 20.0 / (sr / 2), "lowpass", output="sos")
@@ -449,15 +463,17 @@ def voice_treble(x: np.ndarray, sr: int = 48000, amount: float = 0.6) -> np.ndar
     env_ref = float(np.percentile(env, 92)) + 1e-9
     gate = np.clip((env - 0.10 * env_ref) / (0.35 * env_ref), 0.0, 1.0)
 
-    pres_layer = pres * (0.35 * amount) * gate
-    air_layer = air * (0.55 * amount) * gate
+    pres_layer = pres * (0.50 * amount) * gate
+    air_layer = air * (0.75 * amount) * gate
     return (x + pres_layer + air_layer).astype(np.float32)
 
 
 def podcast_space(x: np.ndarray, space_type: str, sr: int = 48000) -> np.ndarray:
-    """Clean spatial presentation for Podcast filters without artificial room reverb or delay."""
+    """Stereo spatial acoustics for Podcast filters, applied after the speech pause gate."""
     if space_type == "theatre":
         return theatre_space(x, sr)
+    if space_type == "booth":
+        return apply_space(x, {"t60": 0.42, "pre": 14.0, "mix": -21.0, "damp": 0.45, "width": 0.80}, sr)
     return x
 
 

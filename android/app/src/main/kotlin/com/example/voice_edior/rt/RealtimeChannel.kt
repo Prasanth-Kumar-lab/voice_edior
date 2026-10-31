@@ -124,7 +124,7 @@ class RealtimeChannel(private val ctx: Context) : MethodChannel.MethodCallHandle
                 "enhance" -> io.execute {
                     try {
                         val inPath = call.argument<String>("input")!!
-                        val out = call.argument<String>("output") ?: File(dir, "enhanced-${System.currentTimeMillis()}.wav").path
+                        val out = call.argument<String>("output") ?: File(dir, "enhanced-${System.nanoTime()}.wav").path
                         val mode = call.argument<String>("mode") ?: "podcast"
                         val tone = call.argument<String>("tone") ?: "natural"
                         val space = call.argument<String>("space") ?: "dry"

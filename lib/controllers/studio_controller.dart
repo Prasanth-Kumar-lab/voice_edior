@@ -369,11 +369,16 @@ class StudioController extends GetxController {
     unawaited(_peaks(r.path).then((List<double> w) {
       if (token == _renderToken) enhancedWave.assignAll(w);
     }));
-    if (!listenOriginal.value) {
-      await _player.setFilePath(r.path);
-      await _player.setVolume(1.0);
-      await _player.seek(Duration(milliseconds: pos));
-      if (wasPlaying) unawaited(_player.play());
+    listenOriginal.value = false;
+    await _player.stop();
+    await _player.setFilePath(r.path);
+    await _player.setSpeed(1.0);
+    await _player.setVolume(1.0);
+    final int dur = _player.duration?.inMilliseconds ?? durationMs.value;
+    final int resumePos = (dur > 0 && pos >= dur - 400) ? 0 : pos;
+    await _player.seek(Duration(milliseconds: resumePos));
+    if (wasPlaying || resumePos == 0) {
+      unawaited(_player.play());
     }
   }
 

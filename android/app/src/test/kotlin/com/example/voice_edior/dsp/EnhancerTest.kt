@@ -147,5 +147,33 @@ class EnhancerTest {
         assertTrue("Cached restyle should be faster than initial clean ($secondMs ms vs $firstMs ms)", secondMs < firstMs)
         assertTrue("Cached theatrical restyle hits target loudness", abs(r2.lufsOut + 16.0) < 1.0)
         assertEquals(r1.f0, r2.f0)
+
+        // Verify Theatrical + Bass has significantly more low-end bass than Studio Clarity (general_bass)
+        val yGeneral = WavFile.read(out1.path).samples
+        val yTheatrical = WavFile.read(out2.path).samples
+        assertTrue("Theatrical + Bass should include cinema-hall reverb tail", yTheatrical.size > yGeneral.size)
+        val lpGen = Biquad().apply { lowpass(sr, 180.0, 0.707) }
+        val lpTh = Biquad().apply { lowpass(sr, 180.0, 0.707) }
+        val subGen = Biquad().apply { lowpass(sr, 100.0, 0.707) }
+        val subTh = Biquad().apply { lowpass(sr, 100.0, 0.707) }
+        var bassGen = 0.0
+        var bassTh = 0.0
+        var subBassGen = 0.0
+        var subBassTh = 0.0
+        for (i in yGeneral.indices) {
+            val g = lpGen.process(yGeneral[i].toDouble())
+            val t = lpTh.process(yTheatrical[i].toDouble())
+            val sg = subGen.process(yGeneral[i].toDouble())
+            val st = subTh.process(yTheatrical[i].toDouble())
+            bassGen += g * g
+            bassTh += t * t
+            subBassGen += sg * sg
+            subBassTh += st * st
+        }
+        val bassDiffDb = 10.0 * log10((bassTh + 1e-12) / (bassGen + 1e-12))
+        val subDiffDb = 10.0 * log10((subBassTh + 1e-12) / (subBassGen + 1e-12))
+        println("Theatrical + Bass vs Studio Clarity: <180Hz +%.1f dB, <100Hz sub-bass +%.1f dB".format(bassDiffDb, subDiffDb))
+        assertTrue("Theatrical + Bass must have significantly more <180Hz bass (+2.2 dB minimum, got $bassDiffDb)", bassDiffDb > 2.2)
+        assertTrue("Theatrical + Bass must have strong <100Hz sub-bass (+2.8 dB minimum, got $subDiffDb)", subDiffDb > 2.8)
     }
 }

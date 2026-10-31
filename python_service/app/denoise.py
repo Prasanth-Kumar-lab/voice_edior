@@ -85,10 +85,11 @@ def spectral_denoise(x: np.ndarray, amount: float = 0.85, sr: int = 48000) -> np
         n = (len(x) // win) * win
         if n >= win * 4:
             rms = np.sqrt((x[:n].reshape(-1, win).astype(np.float64) ** 2).mean(axis=1))
-            p15 = float(np.percentile(rms, 15))
-            noise_seg = x[:n].reshape(-1, win)[rms <= max(p15, 1e-6)].flatten()
+            p20 = float(np.percentile(rms, 20))
+            noise_seg = x[:n].reshape(-1, win)[rms <= max(p20, 1e-6)].flatten()
             y_noise = noise_seg if len(noise_seg) >= win else None
-            x = nr.reduce_noise(y=x, sr=sr, y_noise=y_noise, stationary=True, prop_decrease=min(1.0, 0.88 + 0.1 * amount))
+            x = nr.reduce_noise(y=x, sr=sr, y_noise=y_noise, stationary=True, prop_decrease=min(1.0, 0.92 + 0.08 * amount))
+            x = nr.reduce_noise(y=x, sr=sr, stationary=False, time_constant_s=1.2, prop_decrease=min(0.85, 0.70 + 0.15 * amount))
     except Exception:
         pass
 
@@ -118,9 +119,9 @@ def spectral_denoise(x: np.ndarray, amount: float = 0.85, sr: int = 48000) -> np
             cur = Ps[:, i].copy()
             sub_min = sub_min[-U:]
         m = np.minimum(m, median_filter(m, size=9, mode="nearest"))
-        noise[:, i] = 2.5 * m
-    beta = 1.0 + 2.0 * amount
-    floor = 10 ** (-(12 + 30 * amount) / 20)
+        noise[:, i] = 4.2 * m
+    beta = 1.3 + 2.2 * amount
+    floor = 10 ** (-(16 + 30 * amount) / 20)
     G = np.ones_like(P)
     gp = np.ones(B)
     gam_prev = np.ones(B)

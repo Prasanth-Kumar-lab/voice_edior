@@ -1,23 +1,52 @@
 package com.example.voice_edior.rt
 
+import com.example.voice_edior.dsp.Biquad
+import com.example.voice_edior.dsp.Fft
 import com.example.voice_edior.dsp.Mastering
 import com.example.voice_edior.dsp.PitchAnalyzer
+import com.example.voice_edior.dsp.VoiceInfo
 import com.example.voice_edior.dsp.VocalChain
 import com.example.voice_edior.dsp.VocalFx
-import com.example.voice_edior.dsp.VoiceInfo
+import com.example.voice_edior.dsp.dbToLin
 import java.io.File
+import java.util.Arrays
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.log10
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 class EnhanceResult(
-    val path: String, val durationMs: Int, val lufsIn: Double, val lufsOut: Double,
-    val floorInDb: Double, val floorOutDb: Double, val f0: Float, val voiceType: String,
+    val path: String, val durationMs: Int,
+    val lufsIn: Double, val lufsOut: Double,
+    val floorInDb: Double, val floorOutDb: Double,
+    val f0: Float, val voiceType: String,
     val stereo: Boolean = false,
 )
 
+private class CleanedVocalCache(
+    val key: String,
+    val sr: Int,
+    val lufsIn: Double,
+    val floorIn: Double,
+    val info: VoiceInfo,
+    val pass1: FloatArray,
+    val cleanMatched: FloatArray,
+)
+
 /**
- * On-device premium pass: pitch analysis → two-stage noise removal → mode chain → final clean → space → loudness.
- *
- * The final clean runs *after* the dynamics: leveling and compression lift whatever remains in the pauses,
- * so the gate has to be the last thing that touches the background.
+ * Multi-stage offline studio vocal enhancer:
+ *  - Stage 1 (Cached): Pitch analysis + Recording-Wide Learned Noise-Profile Wiener Denoiser +
+ *    Streaming Minimum-Statistics Denoiser + 10-Band STFT Spectral Gate.
+ *  - Stage 2 (Instant on Filter Tap): Filter-specific studio EQ, pitch-tracked Theatrical Bass /
+ *    Crisp Air Shaper, De-Esser, Soft-Knee Compressor, and Warmth.
+ *  - Stage 3: Adaptive Zero-Noise Speech Pause Gate + Downward Expander.
+ *  - Stage 4: Post-Gate Harmonic Exciter + Cinema/Studio Reverb + True-Peak LUFS Mastering.
  */
 object Enhancer {
     private val flat = VocalFx(
@@ -25,28 +54,21 @@ object Enhancer {
         compMakeupDb = 0f, limiterCeilingDb = 0f,
     )
 
-    private class CleanedVocalCache(
-        val key: String,
-        val sr: Int,
-        val lufsIn: Double,
-        val floorIn: Double,
-        val info: VoiceInfo,
-        val pass1: FloatArray,
-        val cleanMatched: FloatArray,
-    )
-
     @Volatile
     private var cachedClean: CleanedVocalCache? = null
 
     fun run(
         inPath: String, outPath: String, mode: String, tone: String = "natural", space: String = "dry",
-        level: String = "enhanced", strength: Float = 1.0f,
+        level: String = "enhanced",
+        strength: Float = 1.0f,
         progress: (String, Float) -> Unit = { _, _ -> },
     ): EnhanceResult {
         val vocals = mode == "vocals"
+        val effTone = if (!vocals && tone == "natural") "general_bass" else tone
         val targetLufs = if (vocals) -14.0 else -16.0
-        val inFile = File(inPath)
-        val cacheKey = "$inPath|${inFile.length()}|${inFile.lastModified()}|$vocals"
+        val fileLen = try { File(inPath).length() } catch (_: Throwable) { 0L }
+        val fileMod = try { File(inPath).lastModified() } catch (_: Throwable) { 0L }
+        val cacheKey = "$inPath|$fileLen|$fileMod|$vocals"
 
         var cache = cachedClean
         if (cache == null || cache.key != cacheKey) {
@@ -57,13 +79,27 @@ object Enhancer {
             val lufsIn = Mastering.integratedLufs(x, sr)
             val floorIn = Mastering.noiseFloorDb(x, sr)
 
-            progress("Analyzing pitch", 0.15f)
+            progress("Analyzing voice & noise profile", 0.14f)
             val info = PitchAnalyzer.analyze(x, sr)
-            val initFx = if (vocals) ModeFx.vocals(info, tone, space) else ModeFx.podcast(if (tone == "natural") "general_bass" else tone, level, info)
 
-            // Stage 1: dedicated noise removal at full strength; stage 2 learns the cleaner floor and finishes the job.
-            progress("Removing background noise", 0.3f)
-            val pass1 = process(x, sr, flat.copy(hpfHz = initFx.hpfHz, denoise = 1.0f))
+            // 1A. Recording-wide learned noise-profile spectral subtraction (learns quietest 20% frames)
+            progress("Removing background noise", 0.28f)
+            val preCleaned = profileSpectralDenoise(x, sr, if (vocals) 0.90 else 1.0)
+
+            // 1B. Streaming minimum-statistics Wiener denoiser pass
+            val baseHpf = if (vocals) (0.55f * (if (info.f0P10 > 0f) info.f0P10 else 130f)).coerceIn(55f, 120f) else 60f
+            val denoised = process(preCleaned, sr, flat.copy(hpfHz = baseHpf, denoise = 1.0f))
+
+            // 1C. 10-band STFT spectral expander to strip band-specific hiss & hum
+            progress("Deep spectral clean", 0.42f)
+            val pass1 = multibandSpectralGate(
+                denoised,
+                sr,
+                depthDb = if (vocals) 22.0 else 28.0,
+                marginDb = if (vocals) 5.5 else 6.0,
+                holdMs = if (vocals) 110.0 else 85.0,
+                releaseMs = if (vocals) 180.0 else 150.0,
+            )
 
             val cleanMatched = pass1.copyOf()
             Mastering.normalize(cleanMatched, targetLufs, -1.0, sr)
@@ -83,36 +119,71 @@ object Enhancer {
         val sr = cache.sr
         val info = cache.info
         val pass1 = cache.pass1
-        val fx = if (vocals) ModeFx.vocals(info, tone, space) else ModeFx.podcast(if (tone == "natural") "general_bass" else tone, level, info)
+        val fx = if (vocals) ModeFx.vocals(info, effTone, space) else ModeFx.podcast(effTone, level, info)
 
-        progress("Polishing the voice", 0.5f)
+        progress("Applying vocal filter & EQ", 0.56f)
         val chain = fx.copy(
-            denoise = if (vocals) 0.55f else 0.7f,
-            hpfHz = 20f,
+            denoise = if (vocals) 0.50f else 0.65f,
+            hpfHz = fx.hpfHz,
             gateOn = false,
             reverbMix = 0f,
             exciter = 0f,
         )
-        val shaped = process(pass1, sr, chain)
+        var shaped = process(pass1, sr, chain)
 
-        // Final clean: gate relative to the measured floor, applied after leveling/compression.
-        progress("Final clean", 0.72f)
-        val gateDb = gateThresholdDb(shaped, sr, if (vocals) 8.0 else 10.0)
-        var y = process(
+        // Filter-specific harmonic character shapers
+        if (!vocals) {
+            if (effTone == "theatrical") {
+                val bassAmt = when (level) {
+                    "natural" -> 0.65f
+                    "max" -> 1.10f
+                    else -> 0.90f
+                }
+                shaped = applyTheatricalBass(shaped, info.f0Median, sr, bassAmt)
+            } else if (effTone == "bass_treble" || effTone == "crystal_treble") {
+                val trAmt = if (effTone == "crystal_treble") 0.65f else 0.55f
+                shaped = applyCrispTreble(shaped, sr, trAmt)
+            }
+        } else if (effTone == "deep" || effTone == "warm") {
+            shaped = applyTheatricalBass(shaped, info.f0Median, sr, if (effTone == "deep") 0.60f else 0.35f)
+        } else if (effTone == "bright") {
+            shaped = applyCrispTreble(shaped, sr, 0.50f)
+        }
+
+        // Final clean: adaptive speech pause gate + downward expander after EQ/compression
+        progress("Final clean", 0.74f)
+        val pausedCleaned = applySpeechGate(
             shaped,
+            sr,
+            pauseFloorDb = if (vocals) -48.0 else -56.0,
+            holdMs = if (vocals) 140.0 else 120.0,
+            lookMs = 15.0,
+        )
+        val gateDb = gateThresholdDb(pausedCleaned, sr, if (vocals) 7.5 else 9.0)
+        var y = process(
+            pausedCleaned,
             sr,
             flat.copy(
                 gateOn = true,
                 gateThresholdDb = gateDb,
-                gateDepthDb = if (vocals) 34f else 42f,
-                gateReleaseMs = if (vocals) 80f else 60f,
+                gateDepthDb = if (vocals) 34f else 44f,
+                gateReleaseMs = if (vocals) 85f else 65f,
             ),
         )
 
-        // Colour comes after the gate: the exciter and the reverb then never touch the silenced background.
+        // Post-gate colour & acoustic space: exciter and reverb never touch silenced background noise
         if (fx.reverbMix > 0.001f || fx.exciter > 0.001f) {
-            progress(if (fx.exciter > 0.001f) "Enhancing the voice" else "Adding space", 0.82f)
-            val tail = if (fx.reverbMix > 0.001f) (ModeFx.reverbTailSeconds(space) * sr).toInt() else 0
+            progress(if (fx.reverbMix > 0.001f) "Adding studio acoustic space" else "Enhancing vocal air", 0.84f)
+            val tailSec = if (vocals) {
+                if (fx.reverbMix > 0.001f) ModeFx.reverbTailSeconds(space) else 0.0
+            } else {
+                when (effTone) {
+                    "theatrical" -> 1.2
+                    "studio_booth" -> 0.45
+                    else -> 0.0
+                }
+            }
+            val tail = (tailSec * sr).toInt()
             y = process(
                 y, sr,
                 flat.copy(
@@ -123,7 +194,7 @@ object Enhancer {
             )
         }
 
-        progress("Mastering loudness", 0.9f)
+        progress("Mastering loudness", 0.92f)
         Mastering.normalize(y, targetLufs, -1.0, sr)
 
         val blend = strength.coerceIn(0f, 1f)
@@ -144,23 +215,458 @@ object Enhancer {
     }
 
     /**
-     * Gate threshold from the same peak-following envelope the gate itself uses: a little above the
-     * quiet end of the recording, but never so high that it could clip soft speech (capped 28 dB under loud speech).
+     * Recording-wide noise-profile spectral denoiser (1024-bin STFT, 75% overlap).
+     * Learns the noise spectrum from the quietest 20% of frames across the entire recording
+     * and applies a smooth Decision-Directed Wiener filter.
+     */
+    private fun profileSpectralDenoise(x: FloatArray, sr: Int, amount: Double): FloatArray {
+        val N = 1024
+        val hop = 256
+        val B = N / 2 + 1
+        if (x.size < N * 2) return x.copyOf()
+
+        val nFrames = (x.size - N) / hop + 1
+        val win = DoubleArray(N) { sqrt(0.5 - 0.5 * cos(2.0 * PI * it / N)) }
+        val fft = Fft(N)
+
+        // 1. Measure frame RMS to identify noise-only frames
+        val frameRms = DoubleArray(nFrames)
+        for (f in 0 until nFrames) {
+            val off = f * hop
+            var s = 0.0
+            for (i in 0 until N) {
+                val v = x[off + i].toDouble()
+                s += v * v
+            }
+            frameRms[f] = sqrt(s / N)
+        }
+        val sortedRms = frameRms.copyOf()
+        Arrays.sort(sortedRms)
+        val p20Rms = sortedRms[(nFrames * 0.20).toInt().coerceIn(0, nFrames - 1)]
+        val noiseFrameIndices = ArrayList<Int>()
+        for (f in 0 until nFrames) {
+            if (frameRms[f] <= max(p20Rms * 1.15, 1e-7)) {
+                noiseFrameIndices.add(f)
+            }
+        }
+        if (noiseFrameIndices.isEmpty()) {
+            for (f in 0 until min(8, nFrames)) noiseFrameIndices.add(f)
+        }
+
+        // 2. Build per-bin noise power profile from the 75th percentile of noise frames
+        val re = DoubleArray(N)
+        val im = DoubleArray(N)
+        val nNoise = noiseFrameIndices.size
+        val noiseSpecs = Array(B) { DoubleArray(nNoise) }
+        for (idx in 0 until nNoise) {
+            val off = noiseFrameIndices[idx] * hop
+            for (i in 0 until N) {
+                re[i] = x[off + i] * win[i]
+                im[i] = 0.0
+            }
+            fft.transform(re, im)
+            for (k in 0 until B) {
+                noiseSpecs[k][idx] = re[k] * re[k] + im[k] * im[k] + 1e-12
+            }
+        }
+        val rawNoiseProf = DoubleArray(B)
+        for (k in 0 until B) {
+            Arrays.sort(noiseSpecs[k])
+            rawNoiseProf[k] = noiseSpecs[k][(nNoise * 0.75).toInt().coerceIn(0, nNoise - 1)]
+        }
+        // Smooth noise profile across frequency bins
+        val noiseProf = DoubleArray(B)
+        for (k in 0 until B) {
+            var sum = 0.0
+            var cnt = 0
+            for (d in -2..2) {
+                val j = (k + d).coerceIn(0, B - 1)
+                sum += rawNoiseProf[j]
+                cnt++
+            }
+            noiseProf[k] = (sum / cnt) * (1.8 + 1.2 * amount)
+        }
+
+        // 3. Apply Decision-Directed Wiener filtering across the recording
+        val out = FloatArray(x.size)
+        val norm = FloatArray(x.size)
+        val gPrev = DoubleArray(B) { 1.0 }
+        val gamPrev = DoubleArray(B) { 1.0 }
+        val gain = DoubleArray(B)
+        val smoothGain = DoubleArray(B)
+        val beta = 1.4 + 1.8 * amount
+        val floorGain = dbToLin(-(14.0 + 24.0 * amount))
+        val alpha = 0.96
+
+        for (f in 0 until nFrames) {
+            val off = f * hop
+            for (i in 0 until N) {
+                re[i] = x[off + i] * win[i]
+                im[i] = 0.0
+            }
+            fft.transform(re, im)
+            for (k in 0 until B) {
+                val p = re[k] * re[k] + im[k] * im[k] + 1e-12
+                val gam = p / max(noiseProf[k], 1e-12)
+                val xi = alpha * gPrev[k] * gPrev[k] * gamPrev[k] + (1.0 - alpha) * max(gam - 1.0, 0.0)
+                gain[k] = max(xi / (xi + beta), floorGain)
+                gamPrev[k] = gam
+            }
+            for (k in 0 until B) {
+                val lo = gain[max(k - 1, 0)]
+                val hi = gain[min(k + 1, B - 1)]
+                smoothGain[k] = 0.25 * lo + 0.50 * gain[k] + 0.25 * hi
+                gPrev[k] = smoothGain[k]
+            }
+            for (k in 0 until B) {
+                val g = smoothGain[k]
+                re[k] *= g
+                im[k] *= g
+                if (k in 1 until N / 2) {
+                    re[N - k] = re[k]
+                    im[N - k] = -im[k]
+                }
+            }
+            fft.inverse(re, im)
+            for (i in 0 until N) {
+                val w = win[i]
+                out[off + i] += (re[i] * w).toFloat()
+                norm[off + i] += (w * w).toFloat()
+            }
+        }
+        for (i in x.indices) {
+            out[i] = if (norm[i] > 1e-4f) out[i] / norm[i] else x[i]
+        }
+        return out
+    }
+
+    /**
+     * 10-band STFT spectral expander: learns each frequency band's noise floor and smoothly
+     * closes any band sitting near its floor (both during pauses and in unused high/low bands).
+     */
+    private fun multibandSpectralGate(
+        x: FloatArray,
+        sr: Int,
+        depthDb: Double,
+        marginDb: Double,
+        holdMs: Double,
+        releaseMs: Double,
+    ): FloatArray {
+        val N = 1024
+        val hop = 256
+        val B = N / 2 + 1
+        if (x.size < N * 2) return x.copyOf()
+
+        val edges = doubleArrayOf(0.0, 120.0, 250.0, 500.0, 1000.0, 2000.0, 3200.0, 5000.0, 8000.0, 12000.0, 24001.0)
+        val nb = edges.size - 1
+        val binBand = IntArray(B) { k ->
+            val hz = k.toDouble() * sr / N
+            var b = 0
+            while (b < nb - 1 && hz >= edges[b + 1]) b++
+            b
+        }
+        val centersLog = DoubleArray(nb) { b -> ln(max(20.0, 0.5 * (edges[b] + edges[b + 1]))) }
+        val binLog = DoubleArray(B) { k -> ln(max(20.0, k.toDouble() * sr / N)) }
+
+        val nFrames = (x.size - N) / hop + 1
+        val win = DoubleArray(N) { sqrt(0.5 - 0.5 * cos(2.0 * PI * it / N)) }
+        val fft = Fft(N)
+        val re = DoubleArray(N)
+        val im = DoubleArray(N)
+
+        // Pass 1: measure band energy E[b][f] in dB
+        val E = Array(nb) { DoubleArray(nFrames) }
+        for (f in 0 until nFrames) {
+            val off = f * hop
+            for (i in 0 until N) {
+                re[i] = x[off + i] * win[i]
+                im[i] = 0.0
+            }
+            fft.transform(re, im)
+            val bandSum = DoubleArray(nb)
+            for (k in 0 until B) {
+                bandSum[binBand[k]] += re[k] * re[k] + im[k] * im[k]
+            }
+            for (b in 0 until nb) {
+                E[b][f] = 10.0 * log10(bandSum[b] + 1e-12)
+            }
+        }
+
+        // Compute per-band open amount with hold & asymmetric smoothing
+        val holdFrames = max(1, (holdMs * 1e-3 * sr / hop).toInt())
+        val aOpen = exp(-1.0 / max(1.0, 0.008 * sr / hop))
+        val aClose = exp(-1.0 / max(1.0, releaseMs * 1e-3 * sr / hop))
+        val gBand = Array(nb) { DoubleArray(nFrames) }
+
+        for (b in 0 until nb) {
+            val sorted = E[b].copyOf()
+            Arrays.sort(sorted)
+            val floor = sorted[(nFrames * 0.12).toInt().coerceIn(0, nFrames - 1)]
+            val peak = sorted[(nFrames * 0.88).toInt().coerceIn(0, nFrames - 1)]
+            val thr = max(floor + marginDb, peak - 24.0).coerceAtMost(peak - 6.0)
+            val rawOpen = DoubleArray(nFrames) { f -> ((E[b][f] - thr) / 6.0).coerceIn(0.0, 1.0) }
+
+            var cur = 0.0
+            for (f in 0 until nFrames) {
+                var maxHeld = 0.0
+                val j0 = max(0, f - holdFrames)
+                val j1 = min(nFrames - 1, f + 2) // 2-frame lookahead
+                for (j in j0..j1) {
+                    if (rawOpen[j] > maxHeld) maxHeld = rawOpen[j]
+                }
+                val c = if (maxHeld > cur) aOpen else aClose
+                cur = c * cur + (1.0 - c) * maxHeld
+                gBand[b][f] = cur
+            }
+        }
+
+        // Pass 2: apply interpolated band gains in STFT domain
+        val out = FloatArray(x.size)
+        val norm = FloatArray(x.size)
+        val gs = DoubleArray(nb)
+        val gainDb = DoubleArray(nb)
+
+        for (f in 0 until nFrames) {
+            for (b in 0 until nb) {
+                gs[b] = when (b) {
+                    0, nb - 1 -> gBand[b][f]
+                    else -> 0.25 * gBand[b - 1][f] + 0.50 * gBand[b][f] + 0.25 * gBand[b + 1][f]
+                }
+                gainDb[b] = -(1.0 - gs[b]) * depthDb
+            }
+            val off = f * hop
+            for (i in 0 until N) {
+                re[i] = x[off + i] * win[i]
+                im[i] = 0.0
+            }
+            fft.transform(re, im)
+            for (k in 0 until B) {
+                val lk = binLog[k]
+                val gdb = when {
+                    lk <= centersLog[0] -> gainDb[0]
+                    lk >= centersLog[nb - 1] -> gainDb[nb - 1]
+                    else -> {
+                        var b = 0
+                        while (b < nb - 2 && lk > centersLog[b + 1]) b++
+                        val t = (lk - centersLog[b]) / max(1e-9, centersLog[b + 1] - centersLog[b])
+                        gainDb[b] + t * (gainDb[b + 1] - gainDb[b])
+                    }
+                }
+                val g = 10.0.pow(gdb / 20.0)
+                re[k] *= g
+                im[k] *= g
+                if (k in 1 until N / 2) {
+                    re[N - k] = re[k]
+                    im[N - k] = -im[k]
+                }
+            }
+            fft.inverse(re, im)
+            for (i in 0 until N) {
+                val w = win[i]
+                out[off + i] += (re[i] * w).toFloat()
+                norm[off + i] += (w * w).toFloat()
+            }
+        }
+        for (i in x.indices) {
+            out[i] = if (norm[i] > 1e-4f) out[i] / norm[i] else x[i]
+        }
+        return out
+    }
+
+    /**
+     * Zero-noise speech pause gate: drops background noise between phrases to studio black
+     * with lookahead so word onsets are never clipped.
+     */
+    private fun applySpeechGate(
+        x: FloatArray,
+        sr: Int,
+        pauseFloorDb: Double,
+        holdMs: Double,
+        lookMs: Double,
+    ): FloatArray {
+        val hop = max(1, (0.003 * sr).toInt())
+        val win = max(hop * 2, (0.025 * sr).toInt())
+        if (x.size < win * 2) return x.copyOf()
+
+        val nFrames = (x.size - win) / hop + 1
+        val frameDb = DoubleArray(nFrames)
+        for (f in 0 until nFrames) {
+            val off = f * hop
+            var s = 0.0
+            for (i in 0 until win) {
+                val v = x[off + i].toDouble()
+                s += v * v
+            }
+            frameDb[f] = 20.0 * log10(sqrt(s / win) + 1e-9)
+        }
+        val sorted = frameDb.copyOf()
+        Arrays.sort(sorted)
+        val p15 = sorted[(nFrames * 0.15).toInt().coerceIn(0, nFrames - 1)]
+        val p88 = sorted[(nFrames * 0.88).toInt().coerceIn(0, nFrames - 1)]
+        val dyn = max(6.0, p88 - p15)
+        val speechThr = max(p15 + max(3.0, 0.22 * dyn), p88 - 20.0).coerceAtMost(p88 - 6.0)
+
+        val holdCount = max(1, (holdMs * 1e-3 * sr / hop).toInt())
+        val lookCount = max(1, (lookMs * 1e-3 * sr / hop).toInt())
+        val env = DoubleArray(nFrames)
+        var h = 0
+        for (i in 0 until nFrames) {
+            if (frameDb[i] > speechThr) h = holdCount
+            env[i] = if (h > 0) 1.0 else 0.0
+            if (h > 0) h--
+        }
+        val looked = DoubleArray(nFrames) { i ->
+            env[min(nFrames - 1, i + lookCount)]
+        }
+        val aIn = exp(-1.0 / max(1.0, 0.004 * sr / hop))
+        val aOut = exp(-1.0 / max(1.0, 0.080 * sr / hop))
+        val smoothEnv = DoubleArray(nFrames)
+        var cur = 0.0
+        for (i in 0 until nFrames) {
+            val c = if (looked[i] > cur) aIn else aOut
+            cur = c * cur + (1.0 - c) * looked[i]
+            smoothEnv[i] = cur
+        }
+
+        val pauseFloor = 10.0.pow(pauseFloorDb / 20.0)
+        val out = FloatArray(x.size)
+        val halfWin = win / 2
+        for (i in x.indices) {
+            val fPos = (i - halfWin).toDouble() / hop
+            val f0 = fPos.toInt().coerceIn(0, nFrames - 1)
+            val f1 = (f0 + 1).coerceIn(0, nFrames - 1)
+            val frac = (fPos - f0).coerceIn(0.0, 1.0)
+            val g = smoothEnv[f0] + frac * (smoothEnv[f1] - smoothEnv[f0])
+            val mult = pauseFloor + (1.0 - pauseFloor) * g
+            out[i] = (x[i] * mult).toFloat()
+        }
+        return out
+    }
+
+    /**
+     * Pitch-tracked movie-trailer bass & chest resonance synthesizer for `Theatrical + Bass`.
+     * Uses smooth full-wave harmonic sub-bass reinforcement + fundamental chest warmth gated
+     * by the active speech envelope (zero square-wave buzz, zero bass in pauses).
+     */
+    private fun applyTheatricalBass(x: FloatArray, f0In: Float, sr: Int, amount: Float): FloatArray {
+        if (amount <= 0.01f || x.size < sr / 10) return x
+        val f0 = (if (f0In > 45f) f0In else 135f).coerceIn(70f, 280f).toDouble()
+        val out = x.copyOf()
+
+        // Isolate speaker fundamental & chest band
+        val fundHp = Biquad().apply { highpass(sr, max(50.0, f0 * 0.65), 0.707) }
+        val fundLp = Biquad().apply { lowpass(sr, min(260.0, f0 * 1.9), 0.707) }
+        val subLp1 = Biquad().apply { lowpass(sr, min(145.0, f0 * 0.95), 0.85) }
+        val subLp2 = Biquad().apply { lowpass(sr, min(145.0, f0 * 0.95), 0.85) }
+        val subHp = Biquad().apply { highpass(sr, 42.0, 0.707) }
+
+        val fund = FloatArray(x.size)
+        val env = FloatArray(x.size)
+        val envAtk = exp(-1.0 / (0.008 * sr))
+        val envRel = exp(-1.0 / (0.065 * sr))
+        var curEnv = 0.0
+        for (i in x.indices) {
+            val v = x[i].toDouble()
+            val fn = fundLp.process(fundHp.process(v))
+            fund[i] = fn.toFloat()
+            val av = abs(v)
+            curEnv = if (av > curEnv) envAtk * curEnv + (1.0 - envAtk) * av else envRel * curEnv + (1.0 - envRel) * av
+            env[i] = curEnv.toFloat()
+        }
+
+        val sortedEnv = env.copyOf()
+        Arrays.sort(sortedEnv)
+        val refEnv = max(1e-6f, sortedEnv[(sortedEnv.size * 0.94).toInt().coerceIn(0, sortedEnv.size - 1)])
+
+        // Continuous C0 octave-down sub-harmonic wave (fn * divSign flips at zero-crossings -> zero step buzz)
+        val sub = FloatArray(x.size)
+        var divSign = 1.0
+        var prevFn = 0.0
+        var voiceSq = 0.0
+        var voiceCnt = 0
+        var subSq = 0.0
+        for (i in x.indices) {
+            val fn = fund[i].toDouble()
+            if (prevFn <= 0.0 && fn > 0.0) {
+                divSign = -divSign
+            }
+            prevFn = fn
+            val rawSub = subHp.process(subLp2.process(subLp1.process(fn * divSign)))
+            sub[i] = rawSub.toFloat()
+            if (env[i] > 0.12f * refEnv) {
+                voiceSq += x[i] * x[i]
+                subSq += rawSub * rawSub
+                voiceCnt++
+            }
+        }
+        val voiceRms = sqrt(voiceSq / max(1, voiceCnt) + 1e-12)
+        val subRms = sqrt(subSq / max(1, voiceCnt) + 1e-12)
+        val subScale = (0.95 * amount * voiceRms / subRms).toFloat()
+        val chestScale = 1.65f * amount
+        val satRef = max(1e-4, voiceRms * 1.15)
+        val dryBlend = (1.0f - 0.18f * amount.coerceIn(0f, 1.2f))
+
+        for (i in x.indices) {
+            val drive = ((env[i] - 0.08f * refEnv) / (0.60f * refEnv)).coerceIn(0f, 1.35f)
+            val rawBass = ((fund[i] * chestScale + sub[i] * subScale) * drive).toDouble()
+            val fatBass = (kotlin.math.tanh(rawBass / satRef) * satRef).toFloat()
+            out[i] = (x[i] * dryBlend + fatBass).coerceIn(-0.98f, 0.98f)
+        }
+        return out
+    }
+
+    /**
+     * Speech-following high-definition articulation & air enhancer for `Crisp Air & Detail`
+     * and `Crystal Presence`. Strictly gated by active speech so pauses stay silent.
+     */
+    private fun applyCrispTreble(x: FloatArray, sr: Int, amount: Float): FloatArray {
+        if (amount <= 0.01f || x.size < sr / 10) return x
+        val out = x.copyOf()
+        val presHp = Biquad().apply { highpass(sr, 2800.0, 0.707) }
+        val presLp = Biquad().apply { lowpass(sr, 6200.0, 0.707) }
+        val airHp = Biquad().apply { highpass(sr, 6200.0, 0.707) }
+        val airLp = Biquad().apply { lowpass(sr, 12000.0, 0.707) }
+
+        val env = FloatArray(x.size)
+        val envRel = exp(-1.0 / (0.045 * sr))
+        var cur = 0.0
+        for (i in x.indices) {
+            val av = abs(x[i]).toDouble()
+            cur = if (av > cur) av else envRel * cur + (1.0 - envRel) * av
+            env[i] = cur.toFloat()
+        }
+        val sorted = env.copyOf()
+        Arrays.sort(sorted)
+        val ref = max(1e-6f, sorted[(sorted.size * 0.92).toInt().coerceIn(0, sorted.size - 1)])
+
+        for (i in x.indices) {
+            val v = x[i].toDouble()
+            val pres = presLp.process(presHp.process(v)).toFloat()
+            val air = airLp.process(airHp.process(v)).toFloat()
+            val gate = ((env[i] - 0.10f * ref) / (0.40f * ref)).coerceIn(0f, 1.0f)
+            out[i] = (x[i] + (pres * 0.55f * amount + air * 0.80f * amount) * gate).coerceIn(-0.98f, 0.98f)
+        }
+        return out
+    }
+
+    /**
+     * Adaptive gate threshold: sits above the recording's noise floor in pauses while staying
+     * safely below active speech, without clamping to a fixed ceiling that would miss loud room noise.
      */
     fun gateThresholdDb(x: FloatArray, sr: Int, marginDb: Double): Float {
-        val coef = kotlin.math.exp(-1.0 / (0.012 * sr))
+        val coef = exp(-1.0 / (0.012 * sr))
         var env = 0.0
         val levels = ArrayList<Double>(x.size / 480 + 1)
         for (i in x.indices) {
-            val a = kotlin.math.abs(x[i]).toDouble()
+            val a = abs(x[i]).toDouble()
             env = if (a > env) a else env * coef + a * (1 - coef)
-            if (i % 480 == 0) levels.add(20 * kotlin.math.log10(env + 1e-9))
+            if (i % 480 == 0) levels.add(20 * log10(env + 1e-9))
         }
-        if (levels.size < 10) return -60f
+        if (levels.size < 10) return -55f
         levels.sort()
-        val p15 = levels[(levels.size * 0.15).toInt()]
+        val p20 = levels[(levels.size * 0.20).toInt()]
         val p90 = levels[minOf(levels.size - 1, (levels.size * 0.90).toInt())]
-        return minOf(p15 + marginDb, p90 - 15.0).coerceIn(-72.0, -32.0).toFloat()
+        return max(p20 + marginDb, p90 - 20.0).coerceAtMost(p90 - 7.0).coerceIn(-70.0, -14.0).toFloat()
     }
 
     /** Runs a chain over the whole clip, removes its latency, and optionally keeps [tail] extra samples (reverb). */
