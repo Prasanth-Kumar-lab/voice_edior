@@ -130,8 +130,8 @@ class PipelineTests(unittest.TestCase):
         self.assertGreater(ultra_bass, general, "Ultra Bass should carry more low end than General + Bass")
         self.assertLess(crystal, general, "Crystal Treble should carry more treble than General + Bass")
         theatrical, rep = enhance("podcast", x, SR, eq="theatrical")
-        self.assertEqual(theatrical.ndim, 2, "Theatrical should output stereo cinema-hall depth")
-        self.assertTrue(rep.get("stereo"), "Theatrical report should mark stereo=True")
+        self.assertEqual(theatrical.ndim, 1, "Theatrical should output clean mono with zero reverb")
+        self.assertFalse(rep.get("stereo"), "Theatrical report should not mark stereo=True")
 
     def test_limiter_never_exceeds_ceiling(self):
         x = (0.9 * np.sin(2 * np.pi * 300 * np.arange(SR * 3) / SR)).astype(np.float32)

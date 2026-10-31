@@ -126,13 +126,14 @@ class EnhancerTest {
     }
 
     @Test fun cachedFilterRestyleIsSignificantlyFasterThanInitialClean() {
-        val (v, _) = voice(135.0, 8.0)
+        val (v, on) = voice(135.0, 8.0)
         val nz = noise(-44.0, v.size)
         val noisy = FloatArray(v.size) { v[it] + nz[it] }
         val dir = createTempDir("vpfast")
         val inF = File(dir, "in.wav")
         val out1 = File(dir, "out1.wav")
         val out2 = File(dir, "out2.wav")
+        val out3 = File(dir, "out3.wav")
         WavFile.write(inF.path, PcmClip(noisy, sr))
 
         val t0 = System.nanoTime()
@@ -143,37 +144,27 @@ class EnhancerTest {
         val r2 = Enhancer.run(inF.path, out2.path, "podcast", "theatrical", "dry", "enhanced")
         val secondMs = (System.nanoTime() - t1) / 1_000_000.0
 
+        val r3 = Enhancer.run(inF.path, out3.path, "podcast", "studio_booth", "dry", "enhanced")
+
         println("Initial clean+enhance: %.1f ms, cached filter switch (theatrical): %.1f ms".format(firstMs, secondMs))
         assertTrue("Cached restyle should be faster than initial clean ($secondMs ms vs $firstMs ms)", secondMs < firstMs)
         assertTrue("Cached theatrical restyle hits target loudness", abs(r2.lufsOut + 16.0) < 1.0)
+        assertTrue("Cached studio_booth restyle hits target loudness", abs(r3.lufsOut + 16.0) < 1.0)
         assertEquals(r1.f0, r2.f0)
 
-        // Verify Theatrical + Bass has significantly more low-end bass than Studio Clarity (general_bass)
+        // Verify Theatrical and Studio Booth are ultra-clean (>35 dB noise reduction) and bass-free (zero bass mud)
         val yGeneral = WavFile.read(out1.path).samples
         val yTheatrical = WavFile.read(out2.path).samples
-        assertTrue("Theatrical + Bass should include cinema-hall reverb tail", yTheatrical.size > yGeneral.size)
-        val lpGen = Biquad().apply { lowpass(sr, 180.0, 0.707) }
-        val lpTh = Biquad().apply { lowpass(sr, 180.0, 0.707) }
-        val subGen = Biquad().apply { lowpass(sr, 100.0, 0.707) }
-        val subTh = Biquad().apply { lowpass(sr, 100.0, 0.707) }
-        var bassGen = 0.0
-        var bassTh = 0.0
-        var subBassGen = 0.0
-        var subBassTh = 0.0
-        for (i in yGeneral.indices) {
-            val g = lpGen.process(yGeneral[i].toDouble())
-            val t = lpTh.process(yTheatrical[i].toDouble())
-            val sg = subGen.process(yGeneral[i].toDouble())
-            val st = subTh.process(yTheatrical[i].toDouble())
-            bassGen += g * g
-            bassTh += t * t
-            subBassGen += sg * sg
-            subBassTh += st * st
-        }
-        val bassDiffDb = 10.0 * log10((bassTh + 1e-12) / (bassGen + 1e-12))
-        val subDiffDb = 10.0 * log10((subBassTh + 1e-12) / (subBassGen + 1e-12))
-        println("Theatrical + Bass vs Studio Clarity: <180Hz +%.1f dB, <100Hz sub-bass +%.1f dB".format(bassDiffDb, subDiffDb))
-        assertTrue("Theatrical + Bass must have significantly more <180Hz bass (+2.2 dB minimum, got $bassDiffDb)", bassDiffDb > 2.2)
-        assertTrue("Theatrical + Bass must have strong <100Hz sub-bass (+2.8 dB minimum, got $subDiffDb)", subDiffDb > 2.8)
+        val yBooth = WavFile.read(out3.path).samples
+        assertEquals("Theatrical should be clean dry with zero reverb tail", yGeneral.size, yTheatrical.size)
+        assertEquals("Studio Booth should be clean dry with zero reverb tail", yGeneral.size, yBooth.size)
+
+        val dropTh = (rmsDb(noisy, on, false, 48000) - rmsDb(yTheatrical, on, false, 48000)) -
+            (rmsDb(noisy, on, true, 48000) - rmsDb(yTheatrical, on, true, 48000))
+        val dropBooth = (rmsDb(noisy, on, false, 48000) - rmsDb(yBooth, on, false, 48000)) -
+            (rmsDb(noisy, on, true, 48000) - rmsDb(yBooth, on, true, 48000))
+        println("Theatrical clean drop: -%.1f dB, Studio Booth clean drop: -%.1f dB".format(dropTh, dropBooth))
+        assertTrue("Theatrical must be ultra-clean (>35 dB background drop, got $dropTh)", dropTh > 35.0)
+        assertTrue("Studio Booth must be ultra-clean (>35 dB background drop, got $dropBooth)", dropBooth > 35.0)
     }
 }

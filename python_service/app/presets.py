@@ -69,18 +69,15 @@ PODCAST_TONES: Dict[str, Dict[str, object]] = {
         "chain": {"exciter": 0.08, "parallel": 0.12, "presence": 1.2, "ratio": 2.6, "prox": 0.0,
                   "deess_hz": 6200.0, "deess": 0.85, "hpf_f0": 0.70},
     },
-    # Theatrical + Bass: movie-trailer bass + sub-octave + stereo cinema-hall depth (the only bass filter)
+    # Theatrical: clean cinematic narrator voice — zero bass mud, commanding mid-high focus & clarity
     "theatrical": {
-        "label": "Theatrical + Bass",
-        "blurb": "Movie-trailer bass that follows your voice, cinema-hall depth",
-        "curve": [(40, 2.5), (80, 6.0), (140, 5.0), (300, -4.5), (600, -1.5), (1500, 0.5), (3000, 3.0), (5000, 1.0), (9000, -3.0), (14000, -6.0)],
-        "bass": 0.85,
-        "treble": 0.08,
-        "warmth": 0.18,
-        "theatre": True,
-        "space": "theatre",
-        "chain": {"exciter": 0.08, "parallel": 0.15, "presence": 1.2, "ratio": 2.4, "prox": 1.2,
-                  "deess_hz": 6200.0, "deess": 0.85, "hpf_f0": 0.0},
+        "label": "Theatrical",
+        "blurb": "Clean cinematic presence · zero bass mud · commanding, crystal-clear voice",
+        "curve": [(50, -8.5), (120, -3.5), (300, -4.0), (800, 1.0), (1500, 2.2), (3000, 4.0), (5000, 3.5), (8000, 2.0), (12000, 1.5), (16000, -3.5)],
+        "treble": 0.22,
+        "warmth": 0.05,
+        "chain": {"exciter": 0.14, "parallel": 0.18, "presence": 1.6, "ratio": 3.0, "prox": 0.0,
+                  "deess_hz": 6300.0, "deess": 0.88, "hpf_f0": 0.78},
     },
     # Crisp Air & Detail: modern HD creator sound — open, articulate top, silky (never harsh) consonants
     "bass_treble": {
@@ -112,16 +109,15 @@ PODCAST_TONES: Dict[str, Dict[str, object]] = {
         "chain": {"exciter": 0.15, "parallel": 0.20, "presence": 1.8, "ratio": 3.2, "prox": 0.0,
                   "deess_hz": 6400.0, "deess": 0.92, "hpf_f0": 0.85},
     },
-    # Studio Booth: acoustically treated booth — balanced voice with short, wide early reflections (stereo)
+    # Studio Booth: acoustically treated dead vocal booth — ultra-clean isolation, zero room echo/boxiness
     "studio_booth": {
         "label": "Studio Booth",
-        "blurb": "Treated vocal booth · balanced voice · short wide stereo reflections",
-        "curve": [(50, -7.0), (130, -2.0), (320, -2.5), (1000, 1.0), (3000, 2.5), (5500, 1.0), (9500, -1.0), (15000, -4.5)],
-        "treble": 0.12,
-        "warmth": 0.12,
-        "space": "booth",
-        "chain": {"exciter": 0.08, "parallel": 0.15, "presence": 1.0, "ratio": 2.5, "prox": 0.0,
-                  "deess_hz": 6200.0, "deess": 0.85, "hpf_f0": 0.70},
+        "blurb": "Acoustically treated booth · ultra-clean voice isolation · zero room echo",
+        "curve": [(50, -9.0), (130, -3.5), (280, -4.5), (420, -3.0), (1200, 1.8), (3000, 3.5), (5500, 3.0), (8500, 2.0), (12000, 1.5), (16000, -3.5)],
+        "treble": 0.20,
+        "warmth": 0.04,
+        "chain": {"exciter": 0.12, "parallel": 0.16, "presence": 1.5, "ratio": 2.8, "prox": 0.0,
+                  "deess_hz": 6300.0, "deess": 0.88, "hpf_f0": 0.82},
     },
 }
 

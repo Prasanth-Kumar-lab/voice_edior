@@ -31,10 +31,10 @@ class PodcastTone {
   );
   static const theatrical = PodcastTone(
     'theatrical',
-    'Theatrical + Bass',
-    'Movie-trailer bass that follows your voice · immersive cinema-hall depth',
+    'Theatrical',
+    'Clean cinematic presence · zero bass mud · commanding, crystal-clear voice',
     proOnly: true,
-    tag: 'Cinema Sub-Bass',
+    tag: 'Cinema Clean',
     icon: Icons.movie_filter_rounded,
   );
   static const bassTreble = PodcastTone(
@@ -64,9 +64,9 @@ class PodcastTone {
   static const studioBooth = PodcastTone(
     'studio_booth',
     'Studio Booth',
-    'Treated vocal booth · balanced voice · short wide stereo reflections',
+    'Acoustically treated booth · ultra-clean voice isolation · zero room echo',
     proOnly: true,
-    tag: 'Treated Space',
+    tag: 'Ultra-Clean Booth',
     icon: Icons.surround_sound_rounded,
   );
 

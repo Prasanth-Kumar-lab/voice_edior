@@ -133,9 +133,13 @@ def enhance_podcast(x_in: np.ndarray, sr: int, cb: Progress = _noop, tone: str =
     # Final clean comes *after* the dynamics: leveling and compression lift whatever is left in the pauses,
     # so the gate has to be the last thing that touches the background.
     cb("Final clean", 0.84)
-    x = pl.spectral_gate(x, depth_db=32.0, margin_db=5.0, hold_ms=80.0, release_ms=160.0, voiced=vo)
-    x = pl.dominant_expander(x, rel_db=-22.0, depth_db=20.0)
-    x = pl.apply_speech_gate(x, SR, pause_floor_db=-60.0, hold_ms=130.0, look_ms=15.0)
+    if tone in ("studio_booth", "theatrical"):
+        x = dereverb(x, amount=0.35 if tone == "studio_booth" else 0.25, t60=0.35)
+    gate_depth = 38.0 if tone == "studio_booth" else (35.0 if tone == "theatrical" else 32.0)
+    pause_floor = -65.0 if tone == "studio_booth" else (-63.0 if tone == "theatrical" else -60.0)
+    x = pl.spectral_gate(x, depth_db=gate_depth, margin_db=5.5, hold_ms=75.0, release_ms=145.0, voiced=vo)
+    x = pl.dominant_expander(x, rel_db=-20.0, depth_db=22.0)
+    x = pl.apply_speech_gate(x, SR, pause_floor_db=pause_floor, hold_ms=115.0, look_ms=15.0)
 
     sp_type = str(tcfg.get("space", "theatre" if tcfg.get("theatre") else ""))
     if sp_type:
@@ -387,9 +391,13 @@ def style_from_cache(
         if w_amt > 0:
             x = pl.warmth(x, w_amt)
         x, _ = pl.deess(x, SR, center=ch["deess_hz"], amount=ch["deess"])
-        x = pl.spectral_gate(x, depth_db=32.0, margin_db=5.0, hold_ms=80.0, release_ms=160.0, voiced=voiced)
-        x = pl.dominant_expander(x, rel_db=-22.0, depth_db=20.0)
-        x = pl.apply_speech_gate(x, SR, pause_floor_db=-60.0, hold_ms=130.0, look_ms=15.0)
+        if tone in ("studio_booth", "theatrical"):
+            x = dereverb(x, amount=0.35 if tone == "studio_booth" else 0.25, t60=0.35)
+        gate_depth = 38.0 if tone == "studio_booth" else (35.0 if tone == "theatrical" else 32.0)
+        pause_floor = -65.0 if tone == "studio_booth" else (-63.0 if tone == "theatrical" else -60.0)
+        x = pl.spectral_gate(x, depth_db=gate_depth, margin_db=5.5, hold_ms=75.0, release_ms=145.0, voiced=voiced)
+        x = pl.dominant_expander(x, rel_db=-20.0, depth_db=22.0)
+        x = pl.apply_speech_gate(x, SR, pause_floor_db=pause_floor, hold_ms=115.0, look_ms=15.0)
         sp_type = str(tcfg.get("space", "theatre" if tcfg.get("theatre") else ""))
         if sp_type:
             x = pl.podcast_space(x, sp_type, SR)

@@ -123,7 +123,7 @@ object Enhancer {
 
         progress("Applying vocal filter & EQ", 0.56f)
         val chain = fx.copy(
-            denoise = if (vocals) 0.50f else 0.65f,
+            denoise = if (vocals) 0.35f else if (effTone == "studio_booth" || effTone == "theatrical") 0.55f else 0.40f,
             hpfHz = fx.hpfHz,
             gateOn = false,
             reverbMix = 0f,
@@ -131,58 +131,77 @@ object Enhancer {
         )
         var shaped = process(pass1, sr, chain)
 
-        // Filter-specific harmonic character shapers
+        // Filter-specific clean articulation & studio booth de-rooming (zero bass boom / zero double-voice)
         if (!vocals) {
-            if (effTone == "theatrical") {
-                val bassAmt = when (level) {
-                    "natural" -> 0.65f
-                    "max" -> 1.10f
-                    else -> 0.90f
-                }
-                shaped = applyTheatricalBass(shaped, info.f0Median, sr, bassAmt)
+            if (effTone == "theatrical" || effTone == "studio_booth") {
+                // Extra spectral room/mud clean pass so Theatrical and Studio Booth are ultra-clean
+                shaped = multibandSpectralGate(
+                    shaped,
+                    sr,
+                    depthDb = if (effTone == "studio_booth") 26.0 else 22.0,
+                    marginDb = if (effTone == "studio_booth") 6.5 else 6.0,
+                    holdMs = if (effTone == "studio_booth") 70.0 else 80.0,
+                    releaseMs = if (effTone == "studio_booth") 110.0 else 125.0,
+                )
+                val trAmt = if (effTone == "theatrical") 0.45f else 0.38f
+                shaped = applyCrispTreble(shaped, sr, trAmt)
             } else if (effTone == "bass_treble" || effTone == "crystal_treble") {
                 val trAmt = if (effTone == "crystal_treble") 0.65f else 0.55f
                 shaped = applyCrispTreble(shaped, sr, trAmt)
             }
-        } else if (effTone == "deep" || effTone == "warm") {
-            shaped = applyTheatricalBass(shaped, info.f0Median, sr, if (effTone == "deep") 0.60f else 0.35f)
         } else if (effTone == "bright") {
             shaped = applyCrispTreble(shaped, sr, 0.50f)
         }
 
         // Final clean: adaptive speech pause gate + downward expander after EQ/compression
         progress("Final clean", 0.74f)
+        val pauseFloor = when {
+            vocals -> -48.0
+            effTone == "studio_booth" -> -64.0
+            effTone == "theatrical" -> -62.0
+            else -> -56.0
+        }
+        val pauseHold = when {
+            vocals -> 140.0
+            effTone == "studio_booth" -> 95.0
+            effTone == "theatrical" -> 105.0
+            else -> 120.0
+        }
         val pausedCleaned = applySpeechGate(
             shaped,
             sr,
-            pauseFloorDb = if (vocals) -48.0 else -56.0,
-            holdMs = if (vocals) 140.0 else 120.0,
+            pauseFloorDb = pauseFloor,
+            holdMs = pauseHold,
             lookMs = 15.0,
         )
-        val gateDb = gateThresholdDb(pausedCleaned, sr, if (vocals) 7.5 else 9.0)
+        val gateMargin = when {
+            vocals -> 7.5
+            effTone == "studio_booth" -> 10.5
+            effTone == "theatrical" -> 10.0
+            else -> 9.0
+        }
+        val gateDb = gateThresholdDb(pausedCleaned, sr, gateMargin)
+        val gateDepth = when {
+            vocals -> 34f
+            effTone == "studio_booth" -> 52f
+            effTone == "theatrical" -> 48f
+            else -> 44f
+        }
         var y = process(
             pausedCleaned,
             sr,
             flat.copy(
                 gateOn = true,
                 gateThresholdDb = gateDb,
-                gateDepthDb = if (vocals) 34f else 44f,
-                gateReleaseMs = if (vocals) 85f else 65f,
+                gateDepthDb = gateDepth,
+                gateReleaseMs = if (vocals) 85f else 60f,
             ),
         )
 
-        // Post-gate colour & acoustic space: exciter and reverb never touch silenced background noise
+        // Post-gate colour & acoustic space: exciter and (for Vocals only) reverb never touch silenced background noise
         if (fx.reverbMix > 0.001f || fx.exciter > 0.001f) {
             progress(if (fx.reverbMix > 0.001f) "Adding studio acoustic space" else "Enhancing vocal air", 0.84f)
-            val tailSec = if (vocals) {
-                if (fx.reverbMix > 0.001f) ModeFx.reverbTailSeconds(space) else 0.0
-            } else {
-                when (effTone) {
-                    "theatrical" -> 1.2
-                    "studio_booth" -> 0.45
-                    else -> 0.0
-                }
-            }
+            val tailSec = if (vocals && fx.reverbMix > 0.001f) ModeFx.reverbTailSeconds(space) else 0.0
             val tail = (tailSec * sr).toInt()
             y = process(
                 y, sr,
@@ -539,78 +558,6 @@ object Enhancer {
             val g = smoothEnv[f0] + frac * (smoothEnv[f1] - smoothEnv[f0])
             val mult = pauseFloor + (1.0 - pauseFloor) * g
             out[i] = (x[i] * mult).toFloat()
-        }
-        return out
-    }
-
-    /**
-     * Pitch-tracked movie-trailer bass & chest resonance synthesizer for `Theatrical + Bass`.
-     * Uses smooth full-wave harmonic sub-bass reinforcement + fundamental chest warmth gated
-     * by the active speech envelope (zero square-wave buzz, zero bass in pauses).
-     */
-    private fun applyTheatricalBass(x: FloatArray, f0In: Float, sr: Int, amount: Float): FloatArray {
-        if (amount <= 0.01f || x.size < sr / 10) return x
-        val f0 = (if (f0In > 45f) f0In else 135f).coerceIn(70f, 280f).toDouble()
-        val out = x.copyOf()
-
-        // Isolate speaker fundamental & chest band
-        val fundHp = Biquad().apply { highpass(sr, max(50.0, f0 * 0.65), 0.707) }
-        val fundLp = Biquad().apply { lowpass(sr, min(260.0, f0 * 1.9), 0.707) }
-        val subLp1 = Biquad().apply { lowpass(sr, min(145.0, f0 * 0.95), 0.85) }
-        val subLp2 = Biquad().apply { lowpass(sr, min(145.0, f0 * 0.95), 0.85) }
-        val subHp = Biquad().apply { highpass(sr, 42.0, 0.707) }
-
-        val fund = FloatArray(x.size)
-        val env = FloatArray(x.size)
-        val envAtk = exp(-1.0 / (0.008 * sr))
-        val envRel = exp(-1.0 / (0.065 * sr))
-        var curEnv = 0.0
-        for (i in x.indices) {
-            val v = x[i].toDouble()
-            val fn = fundLp.process(fundHp.process(v))
-            fund[i] = fn.toFloat()
-            val av = abs(v)
-            curEnv = if (av > curEnv) envAtk * curEnv + (1.0 - envAtk) * av else envRel * curEnv + (1.0 - envRel) * av
-            env[i] = curEnv.toFloat()
-        }
-
-        val sortedEnv = env.copyOf()
-        Arrays.sort(sortedEnv)
-        val refEnv = max(1e-6f, sortedEnv[(sortedEnv.size * 0.94).toInt().coerceIn(0, sortedEnv.size - 1)])
-
-        // Continuous C0 octave-down sub-harmonic wave (fn * divSign flips at zero-crossings -> zero step buzz)
-        val sub = FloatArray(x.size)
-        var divSign = 1.0
-        var prevFn = 0.0
-        var voiceSq = 0.0
-        var voiceCnt = 0
-        var subSq = 0.0
-        for (i in x.indices) {
-            val fn = fund[i].toDouble()
-            if (prevFn <= 0.0 && fn > 0.0) {
-                divSign = -divSign
-            }
-            prevFn = fn
-            val rawSub = subHp.process(subLp2.process(subLp1.process(fn * divSign)))
-            sub[i] = rawSub.toFloat()
-            if (env[i] > 0.12f * refEnv) {
-                voiceSq += x[i] * x[i]
-                subSq += rawSub * rawSub
-                voiceCnt++
-            }
-        }
-        val voiceRms = sqrt(voiceSq / max(1, voiceCnt) + 1e-12)
-        val subRms = sqrt(subSq / max(1, voiceCnt) + 1e-12)
-        val subScale = (0.95 * amount * voiceRms / subRms).toFloat()
-        val chestScale = 1.65f * amount
-        val satRef = max(1e-4, voiceRms * 1.15)
-        val dryBlend = (1.0f - 0.18f * amount.coerceIn(0f, 1.2f))
-
-        for (i in x.indices) {
-            val drive = ((env[i] - 0.08f * refEnv) / (0.60f * refEnv)).coerceIn(0f, 1.35f)
-            val rawBass = ((fund[i] * chestScale + sub[i] * subScale) * drive).toDouble()
-            val fatBass = (kotlin.math.tanh(rawBass / satRef) * satRef).toFloat()
-            out[i] = (x[i] * dryBlend + fatBass).coerceIn(-0.98f, 0.98f)
         }
         return out
     }
