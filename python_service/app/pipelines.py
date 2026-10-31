@@ -214,6 +214,10 @@ def enhance_vocals(x_in: np.ndarray, sr: int, cb: Progress = _noop, eq: str = "n
     x, gr = pl.compress(x, SR, thr_db=thr, ratio=ratio, attack_ms=10, release_ms=130)
     report.update({"compressor_ratio": round(ratio, 1), "compressor_peak_gr_db": round(gr, 1)})
 
+    cb("Vocal enhance", 0.80)
+    air_amt = {"bright": 0.55, "radio": 0.35, "natural": 0.28, "deep": 0.22, "smooth": 0.14, "warm": 0.14}.get(eq, 0.25)
+    x = pl.voice_treble(x, SR, amount=air_amt)          # speech-following clarity + air, silent in pauses
+
     cb("Final clean", 0.84)
     x = pl.spectral_gate(x, depth_db=28.0, margin_db=5.5, hold_ms=130.0, release_ms=220.0, voiced=voiced)
     x = pl.dominant_expander(x, rel_db=-24.0, depth_db=16.0)
@@ -359,6 +363,8 @@ def style_from_cache(
         x = pl.level(x, SR, target_db=-21.0, max_up=7.0, max_down=6.0)
         x, gr = pl.compress(x, SR, thr_db=-24.0, ratio=2.8, attack_ms=10, release_ms=130)
         report["compressor_peak_gr_db"] = round(gr, 1)
+        air_amt = {"bright": 0.55, "radio": 0.35, "natural": 0.28, "deep": 0.22, "smooth": 0.14, "warm": 0.14}.get(eq, 0.25)
+        x = pl.voice_treble(x, SR, amount=air_amt)          # speech-following clarity + air, silent in pauses
         x = pl.spectral_gate(x, depth_db=28.0, margin_db=5.5, hold_ms=130.0, release_ms=220.0, voiced=voiced)
         x = pl.dominant_expander(x, rel_db=-24.0, depth_db=16.0)
         x = pl.apply_speech_gate(x, SR, pause_floor_db=-52.0, hold_ms=145.0, look_ms=16.0)

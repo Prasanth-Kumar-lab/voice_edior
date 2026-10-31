@@ -131,27 +131,47 @@ object Enhancer {
         )
         var shaped = process(pass1, sr, chain)
 
-        // Filter-specific clean articulation & studio booth de-rooming (zero bass boom / zero double-voice)
-        if (!vocals) {
-            if (effTone == "theatrical" || effTone == "studio_booth") {
-                // Extra spectral room/mud clean pass so Theatrical and Studio Booth are ultra-clean
-                shaped = multibandSpectralGate(
-                    shaped,
-                    sr,
-                    depthDb = if (effTone == "studio_booth") 26.0 else 22.0,
-                    marginDb = if (effTone == "studio_booth") 6.5 else 6.0,
-                    holdMs = if (effTone == "studio_booth") 70.0 else 80.0,
-                    releaseMs = if (effTone == "studio_booth") 110.0 else 125.0,
-                )
-                val trAmt = if (effTone == "theatrical") 0.45f else 0.38f
-                shaped = applyCrispTreble(shaped, sr, trAmt)
-            } else if (effTone == "bass_treble" || effTone == "crystal_treble") {
-                val trAmt = if (effTone == "crystal_treble") 0.65f else 0.55f
-                shaped = applyCrispTreble(shaped, sr, trAmt)
-            }
-        } else if (effTone == "bright") {
-            shaped = applyCrispTreble(shaped, sr, 0.50f)
+        // Premium clean finish for EVERY filter: a spectral de-noise / de-room pass after the filter EQ,
+        // then speech-following vocal enhancement (clarity + air) that never lifts the silent background.
+        progress("Premium vocal clean", 0.66f)
+        val cleanDepth: Double
+        val cleanMargin: Double
+        val cleanHold: Double
+        val cleanRelease: Double
+        when {
+            vocals -> { cleanDepth = 14.0; cleanMargin = 5.5; cleanHold = 140.0; cleanRelease = 200.0 }
+            effTone == "studio_booth" -> { cleanDepth = 26.0; cleanMargin = 6.5; cleanHold = 70.0; cleanRelease = 110.0 }
+            effTone == "theatrical" -> { cleanDepth = 22.0; cleanMargin = 6.0; cleanHold = 80.0; cleanRelease = 125.0 }
+            else -> { cleanDepth = 18.0; cleanMargin = 6.0; cleanHold = 90.0; cleanRelease = 140.0 }
         }
+        shaped = multibandSpectralGate(shaped, sr, cleanDepth, cleanMargin, cleanHold, cleanRelease)
+
+        val levelScale = when (level) {
+            "natural" -> 0.55f
+            "max" -> 1.25f
+            else -> 1.0f
+        }
+        val airAmount = if (vocals) {
+            when (effTone) {
+                "bright" -> 0.55f
+                "radio" -> 0.35f
+                "natural" -> 0.28f
+                "deep" -> 0.22f
+                "smooth", "warm" -> 0.14f
+                else -> 0.25f
+            }
+        } else {
+            levelScale * when (effTone) {
+                "crystal_treble" -> 0.65f
+                "bass_treble" -> 0.55f
+                "theatrical" -> 0.45f
+                "studio_booth" -> 0.38f
+                "general_bass" -> 0.28f
+                "ultra_bass" -> 0.10f
+                else -> 0.25f
+            }
+        }
+        shaped = applyCrispTreble(shaped, sr, airAmount)
 
         // Final clean: adaptive speech pause gate + downward expander after EQ/compression
         progress("Final clean", 0.74f)

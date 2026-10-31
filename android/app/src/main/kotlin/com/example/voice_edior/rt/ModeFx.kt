@@ -120,8 +120,11 @@ object ModeFx {
         }
         val exAmt = when (tone) {
             "bright" -> 0.45f
-            "radio" -> 0.25f
-            else -> 0.12f
+            "radio" -> 0.28f
+            "natural" -> 0.22f
+            "deep" -> 0.16f
+            "smooth", "warm" -> 0.10f
+            else -> 0.18f
         }
         return VocalFx(
             hpfHz = hpf, denoise = 1.0f, gateOn = true, gateThresholdDb = -55f,
