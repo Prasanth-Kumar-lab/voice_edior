@@ -42,15 +42,15 @@ private class CleanedVocalCache(
 /**
  * Multi-stage offline studio vocal enhancer:
  *  - Stage 1 (Cached): Pitch analysis + Recording-Wide Learned Noise-Profile Wiener Denoiser +
- *    Streaming Minimum-Statistics Denoiser + 10-Band STFT Spectral Gate.
- *  - Stage 2 (Instant on Filter Tap): Filter-specific studio EQ, pitch-tracked Theatrical Bass /
- *    Crisp Air Shaper, De-Esser, Soft-Knee Compressor, and Warmth.
- *  - Stage 3: Adaptive Zero-Noise Speech Pause Gate + Downward Expander.
- *  - Stage 4: Post-Gate Harmonic Exciter + Cinema/Studio Reverb + True-Peak LUFS Mastering.
+ *    Streaming Minimum-Statistics Denoiser + Multiband STFT Spectral Expander.
+ *  - Stage 2 (Instant on Filter Tap): Warm vocal bass enhancement, filter-specific studio EQ,
+ *    De-Esser, Soft-Knee Compressor, and Analog Warmth.
+ *  - Stage 3: Natural Smooth-Release Speech Expander (Artifact-free, zero gate-chatter / bomb sounds).
+ *  - Stage 4: Acoustic Reverb + Harmonic Air + True-Peak LUFS Mastering with boundary de-clicking.
  */
 object Enhancer {
     private val flat = VocalFx(
-        hpfHz = 20f, denoise = 0f, gateOn = false, deEssOn = false, eqOn = false, compOn = false,
+        hpfHz = 45f, denoise = 0f, gateOn = false, deEssOn = false, eqOn = false, compOn = false,
         compMakeupDb = 0f, limiterCeilingDb = 0f,
     )
 
@@ -83,23 +83,23 @@ object Enhancer {
             progress("Analyzing voice & noise profile", 0.14f)
             val info = PitchAnalyzer.analyze(x, sr)
 
-            // 1A. Recording-wide learned noise-profile spectral subtraction (learns quietest 20% frames)
+            // 1A. Recording-wide learned noise-profile spectral subtraction
             progress("Removing background noise", 0.28f)
-            val preCleaned = profileSpectralDenoise(x, sr, if (vocals) 0.90 else 1.0)
+            val preCleaned = profileSpectralDenoise(x, sr, if (vocals) 0.85 else 0.95)
 
             // 1B. Streaming minimum-statistics Wiener denoiser pass
-            val baseHpf = if (vocals) (0.55f * (if (info.f0P10 > 0f) info.f0P10 else 130f)).coerceIn(55f, 120f) else 60f
-            val denoised = process(preCleaned, sr, flat.copy(hpfHz = baseHpf, denoise = 1.0f))
+            val baseHpf = if (vocals) (0.45f * (if (info.f0P10 > 0f) info.f0P10 else 120f)).coerceIn(50f, 85f) else 55f
+            val denoised = process(preCleaned, sr, flat.copy(hpfHz = baseHpf, denoise = 0.85f))
 
-            // 1C. 10-band STFT spectral expander to strip band-specific hiss & hum
+            // 1C. Multiband STFT spectral expander to strip band-specific hiss & hum smoothly
             progress("Deep spectral clean", 0.42f)
             val pass1 = multibandSpectralGate(
                 denoised,
                 sr,
-                depthDb = if (vocals) 22.0 else 28.0,
-                marginDb = if (vocals) 5.5 else 6.0,
-                holdMs = if (vocals) 110.0 else 85.0,
-                releaseMs = if (vocals) 180.0 else 150.0,
+                depthDb = if (vocals) 16.0 else 20.0,
+                marginDb = 5.0,
+                holdMs = if (vocals) 140.0 else 120.0,
+                releaseMs = if (vocals) 200.0 else 180.0,
             )
 
             val cleanMatched = pass1.copyOf()
@@ -124,7 +124,7 @@ object Enhancer {
 
         progress("Applying vocal filter & EQ", 0.56f)
         val chain = fx.copy(
-            denoise = if (customFx != null) fx.denoise.coerceIn(0f, 1f) else (if (vocals) 0.35f else if (effTone == "studio_booth" || effTone == "theatrical") 0.55f else 0.40f),
+            denoise = if (customFx != null) fx.denoise.coerceIn(0f, 1f) else (if (vocals) 0.25f else 0.30f),
             hpfHz = fx.hpfHz,
             gateOn = false,
             reverbMix = 0f,
@@ -132,105 +132,75 @@ object Enhancer {
         )
         var shaped = process(pass1, sr, chain)
 
-        // Premium clean finish for EVERY filter: a spectral de-noise / de-room pass after the filter EQ,
-        // then speech-following vocal enhancement (clarity + air) that never lifts the silent background.
-        progress("Premium vocal clean", 0.66f)
-        val cleanDepth: Double
-        val cleanMargin: Double
-        val cleanHold: Double
-        val cleanRelease: Double
-        when {
-            customFx != null -> { cleanDepth = 18.0; cleanMargin = 6.0; cleanHold = 90.0; cleanRelease = 140.0 }
-            vocals -> { cleanDepth = 14.0; cleanMargin = 5.5; cleanHold = 140.0; cleanRelease = 200.0 }
-            effTone == "studio_booth" -> { cleanDepth = 26.0; cleanMargin = 6.5; cleanHold = 70.0; cleanRelease = 110.0 }
-            effTone == "theatrical" -> { cleanDepth = 22.0; cleanMargin = 6.0; cleanHold = 80.0; cleanRelease = 125.0 }
-            else -> { cleanDepth = 18.0; cleanMargin = 6.0; cleanHold = 90.0; cleanRelease = 140.0 }
-        }
-        shaped = multibandSpectralGate(shaped, sr, cleanDepth, cleanMargin, cleanHold, cleanRelease)
-
-        val airAmount = if (customFx != null) {
-            fx.exciter.coerceIn(0f, 1f)
+        // Add rich, warm chest resonance & vocal bass fundamental (90-260 Hz) so voices feel full and natural
+        val warmBodyAmt = if (customFx != null) {
+            0.15f
         } else if (vocals) {
             when (effTone) {
-                "bright" -> 0.55f
-                "radio" -> 0.35f
-                "natural" -> 0.28f
-                "deep" -> 0.22f
-                "smooth", "warm" -> 0.14f
-                else -> 0.25f
+                "deep", "warm" -> 0.45f
+                "smooth" -> 0.38f
+                else -> 0.30f
             }
         } else {
-            val levelScale = when (level) {
-                "natural" -> 0.55f
-                "max" -> 1.25f
-                else -> 1.0f
+            when (effTone) {
+                "ultra_bass" -> 0.50f
+                "theatrical" -> 0.40f
+                "bass_treble" -> 0.38f
+                "general_bass" -> 0.32f
+                "studio_booth" -> 0.28f
+                else -> 0.30f
             }
-            levelScale * when (effTone) {
-                "crystal_treble" -> 0.65f
-                "bass_treble" -> 0.55f
-                "theatrical" -> 0.45f
-                "studio_booth" -> 0.38f
-                "general_bass" -> 0.28f
-                "ultra_bass" -> 0.10f
-                else -> 0.25f
+        }
+        shaped = applyVocalWarmthBody(shaped, sr, warmBodyAmt)
+
+        // Musical vocal clean pass with gentle depth so background is silenced without cutting vocal tails
+        progress("Polishing vocal tone", 0.66f)
+        val cleanDepth = if (customFx != null) 12.0 else (if (vocals) 10.0 else 14.0)
+        shaped = multibandSpectralGate(shaped, sr, cleanDepth, marginDb = 5.0, holdMs = 120.0, releaseMs = 180.0)
+
+        // Delicate speech-following air (never over-hyped or harsh)
+        val airAmount = if (customFx != null) {
+            (fx.exciter * 0.4f).coerceIn(0f, 0.4f)
+        } else if (vocals) {
+            when (effTone) {
+                "bright" -> 0.22f
+                "radio" -> 0.16f
+                else -> 0.10f
+            }
+        } else {
+            when (effTone) {
+                "crystal_treble" -> 0.24f
+                "bass_treble" -> 0.20f
+                "theatrical" -> 0.14f
+                "studio_booth" -> 0.12f
+                "ultra_bass" -> 0.05f
+                else -> 0.12f
             }
         }
         shaped = applyCrispTreble(shaped, sr, airAmount)
 
-        // Final clean: adaptive speech pause gate + downward expander after EQ/compression
-        progress("Final clean", 0.74f)
+        // Natural smooth-release speech expander: eliminates noise in pauses without sudden clicks or gate pops
+        progress("Final background silence", 0.74f)
         val pauseFloor = when {
-            customFx != null -> (fx.gateThresholdDb.toDouble() - 10.0).coerceIn(-70.0, -40.0)
-            vocals -> -48.0
-            effTone == "studio_booth" -> -64.0
-            effTone == "theatrical" -> -62.0
-            else -> -56.0
+            customFx != null -> (fx.gateThresholdDb.toDouble() - 10.0).coerceIn(-35.0, -18.0)
+            vocals -> -22.0
+            effTone == "studio_booth" -> -26.0
+            effTone == "theatrical" -> -24.0
+            else -> -24.0
         }
-        val pauseHold = when {
-            customFx != null -> 120.0
-            vocals -> 140.0
-            effTone == "studio_booth" -> 95.0
-            effTone == "theatrical" -> 105.0
-            else -> 120.0
-        }
-        val pausedCleaned = applySpeechGate(
+        var y = applySpeechGate(
             shaped,
             sr,
             pauseFloorDb = pauseFloor,
-            holdMs = pauseHold,
-            lookMs = 15.0,
-        )
-        val gateMargin = when {
-            customFx != null -> 8.5
-            vocals -> 7.5
-            effTone == "studio_booth" -> 10.5
-            effTone == "theatrical" -> 10.0
-            else -> 9.0
-        }
-        val gateDb = gateThresholdDb(pausedCleaned, sr, gateMargin)
-        val gateDepth = when {
-            customFx != null -> fx.gateDepthDb.coerceIn(12f, 60f)
-            vocals -> 34f
-            effTone == "studio_booth" -> 52f
-            effTone == "theatrical" -> 48f
-            else -> 44f
-        }
-        var y = process(
-            pausedCleaned,
-            sr,
-            flat.copy(
-                gateOn = true,
-                gateThresholdDb = gateDb,
-                gateDepthDb = gateDepth,
-                gateReleaseMs = if (vocals) 85f else 60f,
-            ),
+            holdMs = 160.0,
+            lookMs = 20.0,
         )
 
-        // Post-gate colour & acoustic space: exciter and reverb never touch silenced background noise
+        // Post-gate colour & acoustic space: exciter and reverb
         if (fx.reverbMix > 0.001f || fx.exciter > 0.001f) {
             progress(if (fx.reverbMix > 0.001f) "Adding studio acoustic space" else "Enhancing vocal air", 0.84f)
             val tailSec = if (customFx != null) {
-                if (fx.reverbMix > 0.001f) (fx.reverbSize * 1.8).toDouble() else 0.0
+                if (fx.reverbMix > 0.001f) (fx.reverbSize * 1.4).toDouble() else 0.0
             } else if (vocals && fx.reverbMix > 0.001f) {
                 ModeFx.reverbTailSeconds(space)
             } else 0.0
@@ -248,6 +218,18 @@ object Enhancer {
         progress("Mastering loudness", 0.92f)
         Mastering.normalize(y, targetLufs, -1.0, sr)
 
+        // Smooth cosine fade-in (15ms) and fade-out (20ms) to guarantee zero onset/offset DC pops or thumps
+        val inFade = (0.015 * sr).toInt().coerceIn(16, y.size / 4)
+        for (i in 0 until inFade) {
+            val w = (0.5 - 0.5 * cos(PI * i / inFade)).toFloat()
+            y[i] *= w
+        }
+        val outFade = (0.020 * sr).toInt().coerceIn(16, y.size / 4)
+        for (i in 0 until outFade) {
+            val w = (0.5 - 0.5 * cos(PI * i / outFade)).toFloat()
+            y[y.size - 1 - i] *= w
+        }
+
         val blend = strength.coerceIn(0f, 1f)
         if (blend < 0.999f) {
             val cleanMatched = cache.cleanMatched
@@ -263,6 +245,37 @@ object Enhancer {
             outPath, (y.size * 1000L / sr).toInt(), cache.lufsIn, Mastering.integratedLufs(y, sr),
             cache.floorIn, Mastering.noiseFloorDb(y, sr), info.f0Median, info.type, false,
         )
+    }
+
+    /**
+     * Speech-following vocal warmth and chest resonance enhancer (90–260 Hz).
+     * Gives voices natural fullness and satisfying bass depth without boomy room boxiness.
+     */
+    private fun applyVocalWarmthBody(x: FloatArray, sr: Int, amount: Float): FloatArray {
+        if (amount <= 0.01f || x.size < sr / 10) return x
+        val out = x.copyOf()
+        val bassHp = Biquad().apply { highpass(sr, 95.0, 0.707) }
+        val bassLp = Biquad().apply { lowpass(sr, 250.0, 0.707) }
+
+        val env = FloatArray(x.size)
+        val envRel = exp(-1.0 / (0.050 * sr))
+        var cur = 0.0
+        for (i in x.indices) {
+            val av = abs(x[i]).toDouble()
+            cur = if (av > cur) av else envRel * cur + (1.0 - envRel) * av
+            env[i] = cur.toFloat()
+        }
+        val sorted = env.copyOf()
+        Arrays.sort(sorted)
+        val ref = max(1e-6f, sorted[(sorted.size * 0.90).toInt().coerceIn(0, sorted.size - 1)])
+
+        for (i in x.indices) {
+            val v = x[i].toDouble()
+            val body = bassLp.process(bassHp.process(v)).toFloat()
+            val gate = ((env[i] - 0.08f * ref) / (0.35f * ref)).coerceIn(0f, 1.0f)
+            out[i] = (x[i] + body * 0.75f * amount * gate).coerceIn(-0.98f, 0.98f)
+        }
+        return out
     }
 
     /**
@@ -335,7 +348,7 @@ object Enhancer {
                 sum += rawNoiseProf[j]
                 cnt++
             }
-            noiseProf[k] = (sum / cnt) * (1.8 + 1.2 * amount)
+            noiseProf[k] = (sum / cnt) * (1.6 + 1.0 * amount)
         }
 
         // 3. Apply Decision-Directed Wiener filtering across the recording
@@ -345,8 +358,8 @@ object Enhancer {
         val gamPrev = DoubleArray(B) { 1.0 }
         val gain = DoubleArray(B)
         val smoothGain = DoubleArray(B)
-        val beta = 1.4 + 1.8 * amount
-        val floorGain = dbToLin(-(14.0 + 24.0 * amount))
+        val beta = 1.2 + 1.4 * amount
+        val floorGain = dbToLin(-(12.0 + 18.0 * amount))
         val alpha = 0.96
 
         for (f in 0 until nFrames) {
@@ -392,8 +405,7 @@ object Enhancer {
     }
 
     /**
-     * 10-band STFT spectral expander: learns each frequency band's noise floor and smoothly
-     * closes any band sitting near its floor (both during pauses and in unused high/low bands).
+     * 10-band STFT spectral expander: smoothly reduces noise in unoccupied frequency bands.
      */
     private fun multibandSpectralGate(
         x: FloatArray,
@@ -445,7 +457,7 @@ object Enhancer {
 
         // Compute per-band open amount with hold & asymmetric smoothing
         val holdFrames = max(1, (holdMs * 1e-3 * sr / hop).toInt())
-        val aOpen = exp(-1.0 / max(1.0, 0.008 * sr / hop))
+        val aOpen = exp(-1.0 / max(1.0, 0.012 * sr / hop))
         val aClose = exp(-1.0 / max(1.0, releaseMs * 1e-3 * sr / hop))
         val gBand = Array(nb) { DoubleArray(nFrames) }
 
@@ -525,8 +537,8 @@ object Enhancer {
     }
 
     /**
-     * Zero-noise speech pause gate: drops background noise between phrases to studio black
-     * with lookahead so word onsets are never clipped.
+     * Natural smooth-release speech expander: eliminates noise in pauses without sudden clicks,
+     * gate-drops, or bomb-like transients.
      */
     private fun applySpeechGate(
         x: FloatArray,
@@ -555,7 +567,7 @@ object Enhancer {
         val p15 = sorted[(nFrames * 0.15).toInt().coerceIn(0, nFrames - 1)]
         val p88 = sorted[(nFrames * 0.88).toInt().coerceIn(0, nFrames - 1)]
         val dyn = max(6.0, p88 - p15)
-        val speechThr = max(p15 + max(3.0, 0.22 * dyn), p88 - 20.0).coerceAtMost(p88 - 6.0)
+        val speechThr = max(p15 + max(3.0, 0.20 * dyn), p88 - 22.0).coerceAtMost(p88 - 6.0)
 
         val holdCount = max(1, (holdMs * 1e-3 * sr / hop).toInt())
         val lookCount = max(1, (lookMs * 1e-3 * sr / hop).toInt())
@@ -569,8 +581,9 @@ object Enhancer {
         val looked = DoubleArray(nFrames) { i ->
             env[min(nFrames - 1, i + lookCount)]
         }
-        val aIn = exp(-1.0 / max(1.0, 0.004 * sr / hop))
-        val aOut = exp(-1.0 / max(1.0, 0.080 * sr / hop))
+        // Smooth 16ms attack and 160ms decay prevents transient thumps and envelope clicks
+        val aIn = exp(-1.0 / max(1.0, 0.016 * sr / hop))
+        val aOut = exp(-1.0 / max(1.0, 0.160 * sr / hop))
         val smoothEnv = DoubleArray(nFrames)
         var cur = 0.0
         for (i in 0 until nFrames) {
@@ -595,16 +608,15 @@ object Enhancer {
     }
 
     /**
-     * Speech-following high-definition articulation & air enhancer for `Crisp Air & Detail`
-     * and `Crystal Presence`. Strictly gated by active speech so pauses stay silent.
+     * Speech-following high-definition articulation & air enhancer for top-end polish.
      */
     private fun applyCrispTreble(x: FloatArray, sr: Int, amount: Float): FloatArray {
         if (amount <= 0.01f || x.size < sr / 10) return x
         val out = x.copyOf()
-        val presHp = Biquad().apply { highpass(sr, 2800.0, 0.707) }
-        val presLp = Biquad().apply { lowpass(sr, 6200.0, 0.707) }
-        val airHp = Biquad().apply { highpass(sr, 6200.0, 0.707) }
-        val airLp = Biquad().apply { lowpass(sr, 12000.0, 0.707) }
+        val presHp = Biquad().apply { highpass(sr, 3000.0, 0.707) }
+        val presLp = Biquad().apply { lowpass(sr, 6000.0, 0.707) }
+        val airHp = Biquad().apply { highpass(sr, 6500.0, 0.707) }
+        val airLp = Biquad().apply { lowpass(sr, 11500.0, 0.707) }
 
         val env = FloatArray(x.size)
         val envRel = exp(-1.0 / (0.045 * sr))
@@ -623,29 +635,9 @@ object Enhancer {
             val pres = presLp.process(presHp.process(v)).toFloat()
             val air = airLp.process(airHp.process(v)).toFloat()
             val gate = ((env[i] - 0.10f * ref) / (0.40f * ref)).coerceIn(0f, 1.0f)
-            out[i] = (x[i] + (pres * 0.55f * amount + air * 0.80f * amount) * gate).coerceIn(-0.98f, 0.98f)
+            out[i] = (x[i] + (pres * 0.35f * amount + air * 0.50f * amount) * gate).coerceIn(-0.98f, 0.98f)
         }
         return out
-    }
-
-    /**
-     * Adaptive gate threshold: sits above the recording's noise floor in pauses while staying
-     * safely below active speech, without clamping to a fixed ceiling that would miss loud room noise.
-     */
-    fun gateThresholdDb(x: FloatArray, sr: Int, marginDb: Double): Float {
-        val coef = exp(-1.0 / (0.012 * sr))
-        var env = 0.0
-        val levels = ArrayList<Double>(x.size / 480 + 1)
-        for (i in x.indices) {
-            val a = abs(x[i]).toDouble()
-            env = if (a > env) a else env * coef + a * (1 - coef)
-            if (i % 480 == 0) levels.add(20 * log10(env + 1e-9))
-        }
-        if (levels.size < 10) return -55f
-        levels.sort()
-        val p20 = levels[(levels.size * 0.20).toInt()]
-        val p90 = levels[minOf(levels.size - 1, (levels.size * 0.90).toInt())]
-        return max(p20 + marginDb, p90 - 20.0).coerceAtMost(p90 - 7.0).coerceIn(-70.0, -14.0).toFloat()
     }
 
     /** Runs a chain over the whole clip, removes its latency, and optionally keeps [tail] extra samples (reverb). */

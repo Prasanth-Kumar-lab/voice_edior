@@ -81,21 +81,21 @@ def long_term_spectrum(x: np.ndarray, sr: int, active: np.ndarray) -> Tuple[np.n
 
 
 def adaptive_eq_points(f: np.ndarray, P: np.ndarray, *, mud_hz: float = 280.0, presence_hz: float = 3500.0,
-                       air_db: float = 1.5, strength: float = 1.0) -> List[Tuple[float, float]]:
-    """Corrections measured against a balanced voice: cut excess mud/boom, lift lacking presence, add air."""
+                       air_db: float = 1.0, strength: float = 0.8) -> List[Tuple[float, float]]:
+    """Corrections measured against a balanced voice: warm low-end body, cut nasal mud, gentle presence and air."""
     ref = band_level(P, f, 1000, 2000)
     boom = band_level(P, f, 80, 160) - ref
     mud = band_level(P, f, 200, 400) - ref
     pres = band_level(P, f, 2800, 4500) - ref
     sib = band_level(P, f, 5000, 9000) - ref
-    cut_boom = float(np.clip(boom - 6.0, 0, 5.0)) * strength
-    cut_mud = float(np.clip(mud - 4.0, 0, 5.0)) * strength + 1.0 * strength
-    lift_pres = float(np.clip(-9.0 - pres, 0, 4.5)) * strength + 1.0 * strength
-    tame_harsh = float(np.clip(sib + 11.0, 0, 3.0)) * strength
+    cut_boom = float(np.clip(boom - 9.0, 0, 3.0)) * strength
+    cut_mud = float(np.clip(mud - 5.0, 0, 3.5)) * strength
+    lift_pres = float(np.clip(-10.0 - pres, 0, 3.0)) * strength
+    tame_harsh = float(np.clip(sib + 10.0, 0, 3.0)) * strength
     return [
-        (30, -12), (70, -6), (120, -cut_boom), (mud_hz * 0.7, -cut_mud * 0.6), (mud_hz, -cut_mud),
-        (mud_hz * 1.5, -cut_mud * 0.4), (700, 0.0), (1500, 0.0), (presence_hz * 0.7, lift_pres * 0.6),
-        (presence_hz, lift_pres), (presence_hz * 1.5, lift_pres * 0.5), (7000, -tame_harsh),
+        (35, -8.0), (70, -1.5), (140, 2.0 - cut_boom), (mud_hz * 0.7, -cut_mud * 0.5), (mud_hz, -cut_mud),
+        (mud_hz * 1.5, -cut_mud * 0.3), (700, 0.5), (1500, 0.5), (presence_hz * 0.7, lift_pres * 0.5),
+        (presence_hz, lift_pres), (presence_hz * 1.5, lift_pres * 0.4), (7000, -tame_harsh),
         (10500, air_db * 0.7), (14000, air_db), (22000, air_db * 0.5),
     ]
 
@@ -406,40 +406,26 @@ def parallel_compress(x: np.ndarray, sr: int = 48000, amount: float = 0.25) -> n
 
 
 def voice_bass(x: np.ndarray, f0: float, sr: int = 48000, amount: float = 0.6) -> np.ndarray:
-    """Speech-following movie-trailer bass: tuned to the speaker's own pitch and driven by how they speak.
-
-    Uses smooth full-wave rectified even-order sub-bass reinforcement + fundamental chest resonance
-    scaled by the voice envelope so bass swells on spoken words and is silent in pauses.
+    """Speech-following chest resonance and warm vocal body (90 - 260 Hz).
+    Provides deep, rich, natural voice resonance without sub-harmonic boom or rumble artifacts.
     """
     if amount <= 0.01 or len(x) < sr // 10:
         return x
-    f0 = float(np.clip(f0 or 140.0, 70.0, 300.0))
-    lo, hi = max(50.0, f0 * 0.65), min(320.0, f0 * 2.0)
-    sos = butter(3, [lo / (sr / 2), hi / (sr / 2)], "bandpass", output="sos")
+    f0 = float(np.clip(f0 or 140.0, 80.0, 260.0))
+    lo, hi = max(75.0, f0 * 0.75), min(280.0, f0 * 1.6)
+    sos = butter(2, [lo / (sr / 2), hi / (sr / 2)], "bandpass", output="sos")
     fund = sosfiltfilt(sos, x).astype(np.float32)
 
     env_sos = butter(2, 16.0 / (sr / 2), "lowpass", output="sos")
     env = np.maximum(sosfiltfilt(env_sos, np.abs(x)), 0.0).astype(np.float32)
     ref = float(np.percentile(env, 95)) + 1e-9
-    drive = np.clip((env - 0.08 * ref) / (0.70 * ref), 0.0, 1.35)
+    drive = np.clip((env - 0.06 * ref) / (0.65 * ref), 0.0, 1.0)
 
-    # Continuous C0 octave-down sub-harmonic wave (fund * div_sign flips at zero crossings -> zero step buzz)
-    zc = (fund[:-1] <= 0) & (fund[1:] > 0)
-    div_sign = (1 - 2 * (np.cumsum(np.concatenate([[0], zc.astype(np.int32)])) & 1)).astype(np.float32)
-    sub_raw = fund * div_sign
-    sub_sos = butter(4, min(f0 * 0.90, 145.0) / (sr / 2), "lowpass", output="sos")
-    sub = sosfiltfilt(sub_sos, sub_raw).astype(np.float32)
-    sub = highpass(sub, 40.0, sr)
-
-    active = env > 0.1 * ref
-    voice_rms = float(np.sqrt(np.mean(x[active] ** 2) + 1e-12)) if np.any(active) else 0.05
-    sub_rms = float(np.sqrt(np.mean(sub[active] ** 2) + 1e-12)) if np.any(active) else float(np.sqrt(np.mean(sub ** 2) + 1e-12))
-    chest = fund * (1.55 * amount) * drive
-    sub_layer = sub * (0.90 * amount * voice_rms / sub_rms) * drive
-    sat_ref = max(1e-4, voice_rms * 1.15)
-    fat_bass = np.tanh((chest + sub_layer) / sat_ref) * sat_ref
-    dry_blend = 1.0 - 0.18 * min(amount, 1.2)
-    return (x * dry_blend + fat_bass).astype(np.float32)
+    # Clean chest resonance reinforcement with smooth soft saturation (tanh)
+    chest = fund * (1.6 * amount) * drive
+    sat_ref = max(1e-4, float(np.percentile(np.abs(x), 95)))
+    warm_body = np.tanh(chest / sat_ref) * sat_ref * 0.65
+    return (x + warm_body).astype(np.float32)
 
 
 def theatre_space(x: np.ndarray, sr: int = 48000, mix_db: float = -20.0) -> np.ndarray:
@@ -477,12 +463,10 @@ def podcast_space(x: np.ndarray, space_type: str, sr: int = 48000) -> np.ndarray
     return x
 
 
-def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -60.0,
-                      hold_ms: float = 120.0, look_ms: float = 15.0) -> np.ndarray:
-    """Zero-noise pause gate: completely drops background noise to studio black when speech stops.
-
-    Uses an adaptive energy threshold with lookahead so word onsets (consonants) are never clipped,
-    and a smooth hold/release hangover for natural transitions.
+def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -24.0,
+                      hold_ms: float = 160.0, look_ms: float = 16.0) -> np.ndarray:
+    """Zero-thump downward expander: gently sinks pause noise to a transparent floor
+    without gate chatter, clicking, or low-frequency transient thumps.
     """
     hop = int(0.003 * sr)
     win = int(0.025 * sr)
@@ -514,8 +498,9 @@ def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -6
     if look_count < len(env):
         env = np.concatenate([env[look_count:], np.full(look_count, env[-1])])
 
-    a_in = np.exp(-1.0 / max(1.0, 0.004 * sr / hop))
-    a_out = np.exp(-1.0 / max(1.0, 0.08 * sr / hop))
+    # Smooth attack (16 ms) and release (160 ms)
+    a_in = np.exp(-1.0 / max(1.0, 0.016 * sr / hop))
+    a_out = np.exp(-1.0 / max(1.0, 0.160 * sr / hop))
     cur = 0.0
     smooth_env = np.zeros_like(env)
     for i in range(len(env)):
@@ -526,6 +511,18 @@ def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -6
     centers = np.arange(len(smooth_env)) * hop + win // 2
     samp_gain = np.interp(np.arange(n), centers, smooth_env).astype(np.float32)
 
+    pause_floor_db = max(-26.0, pause_floor_db)
     pause_floor = 10 ** (pause_floor_db / 20)
     mult = pause_floor + (1.0 - pause_floor) * samp_gain
-    return (x * mult).astype(np.float32)
+    out = (x * mult).astype(np.float32)
+
+    # Cosine boundary fade to prevent any clipping/thumps at start and finish
+    fade_in = min(int(0.015 * sr), n // 4)
+    fade_out = min(int(0.020 * sr), n // 4)
+    if fade_in > 0:
+        w_in = 0.5 * (1.0 - np.cos(np.linspace(0, np.pi, fade_in, dtype=np.float32)))
+        out[:fade_in] *= w_in
+    if fade_out > 0:
+        w_out = 0.5 * (1.0 + np.cos(np.linspace(0, np.pi, fade_out, dtype=np.float32)))
+        out[-fade_out:] *= w_out
+    return out

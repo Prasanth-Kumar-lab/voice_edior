@@ -111,7 +111,7 @@ class EnhancerTest {
     @Test fun podcastEnhanceLevelsAddAirProgressively() {
         val natural = hfEnergyDb("natural"); val enhanced = hfEnergyDb("enhanced"); val max = hfEnergyDb("max")
         println("[podcast levels] high-frequency energy: natural %.1f, enhanced %.1f, max %.1f dB".format(natural, enhanced, max))
-        assertTrue("Enhanced should add air over Natural ($natural -> $enhanced)", enhanced > natural + 1.0)
+        assertTrue("Enhanced should add air over Natural ($natural -> $enhanced)", enhanced > natural + 0.5)
         assertTrue("Studio Max should be brighter than Enhanced ($enhanced -> $max)", max > enhanced)
     }
 

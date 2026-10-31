@@ -7,26 +7,29 @@ Curve = List[Tuple[float, float]]
 
 # Tone presets are *added* to the pitch-adaptive base EQ, so every one still follows the singer's voice.
 TONES: Dict[str, Dict[str, object]] = {
-    "natural": {"label": "Natural", "blurb": "Your voice, cleaned and balanced", "curve": []},
+    "natural": {
+        "label": "Natural", "blurb": "Your voice, cleaned and balanced with warm body",
+        "curve": [(60, 0.0), (140, 2.0), (260, 1.0), (1000, 0.0)],
+    },
     "smooth": {
-        "label": "Smooth", "blurb": "Silky, softens harshness",
-        "curve": [(120, 0.0), (220, 1.0), (400, 0.5), (2500, -1.0), (3500, -2.5), (4800, -2.0), (7000, -2.0), (12000, -0.5)],
+        "label": "Smooth", "blurb": "Silky, softens harshness with warm low-mids",
+        "curve": [(60, 0.0), (140, 2.5), (240, 1.5), (400, 0.5), (2500, -1.0), (3500, -2.0), (4800, -1.5), (7000, -1.5), (12000, -0.5)],
     },
     "warm": {
-        "label": "Warm", "blurb": "Fuller, rounder, intimate",
-        "curve": [(80, 0.0), (170, 2.5), (320, 1.5), (1000, 0.0), (3000, -0.5), (5500, -1.5), (10000, -2.5)],
+        "label": "Warm", "blurb": "Fuller, rounder, intimate chest resonance",
+        "curve": [(60, 0.5), (140, 3.5), (260, 2.0), (1000, 0.5), (3000, -0.5), (5500, -1.0), (10000, -2.0)],
     },
     "bright": {
-        "label": "Bright", "blurb": "Airy, forward, sparkly",
-        "curve": [(120, 0.0), (250, -1.0), (1000, 0.0), (3500, 2.0), (8000, 3.0), (13000, 4.0), (18000, 3.0)],
+        "label": "Bright", "blurb": "Airy, forward, sparkly with balanced low-end",
+        "curve": [(60, -1.0), (140, 1.5), (260, 0.5), (1000, 0.5), (3500, 1.5), (8000, 2.2), (13000, 2.5), (18000, 1.5)],
     },
     "deep": {
-        "label": "Deep", "blurb": "Weight and body in the low end",
-        "curve": [(60, 1.5), (120, 3.0), (250, 1.5), (600, 0.0), (3000, 0.5), (9000, -1.0)],
+        "label": "Deep", "blurb": "Rich weight and warm body in the low end",
+        "curve": [(50, 1.5), (130, 4.0), (250, 2.5), (600, 0.5), (3000, 0.5), (9000, -1.0)],
     },
     "radio": {
-        "label": "Radio", "blurb": "Punchy mid-range, broadcast feel",
-        "curve": [(100, -3.0), (200, -1.0), (800, 1.5), (2000, 3.0), (4000, 2.0), (8000, -1.0), (14000, -3.0)],
+        "label": "Radio", "blurb": "Punchy mid-range, broadcast feel with clear voice base",
+        "curve": [(70, -1.5), (150, 1.5), (800, 1.5), (2000, 2.2), (4000, 1.8), (8000, -0.5), (14000, -2.5)],
     },
 }
 
@@ -51,73 +54,72 @@ def space_cfg(space: str) -> Dict[str, object]:
 # ───────────────────────────── Podcast ─────────────────────────────
 
 PODCAST_TONES: Dict[str, Dict[str, object]] = {
-    # Every Podcast filter is a complete, self-contained chain (EQ + dynamics + colour + de-ess), so there is no
-    # separate Enhance level to pick. ONLY Theatrical adds bass; every other filter is strictly bass-free:
-    # nothing below 250 Hz is ever boosted, and the low cut follows the speaker's own pitch for a clean voice.
+    # Every Podcast filter is a complete, self-contained chain (EQ + dynamics + colour + de-ess).
+    # Balanced warm low-end foundation (120-250 Hz) and clear articulate vocal highs.
     #
     #   chain keys: exciter (generated air), parallel (density), presence (extra 2-6 kHz dB), ratio (compressor),
-    #               prox (close-mic low-mid body, Theatrical only), deess_hz / deess (sibilance control),
+    #               prox (close-mic low-mid body), deess_hz / deess (sibilance control),
     #               hpf_f0 (low cut = hpf_f0 x the speaker's lowest pitch).
 
-    # Studio Clarity: neutral, pristine broadcast microphone — honest, articulate, nothing hyped
+    # Studio Clarity: neutral, pristine broadcast microphone — honest, articulate, warm and full
     "general_bass": {
         "label": "Studio Clarity",
-        "blurb": "Neutral broadcast-mic clarity · zero bass, zero mud · every word articulate",
-        "curve": [(50, -8.0), (110, -3.0), (300, -3.0), (800, 0.5), (2500, 2.5), (3500, 3.0), (6000, 0.5), (10000, -1.5), (15000, -4.0)],
-        "treble": 0.12,
-        "warmth": 0.05,
-        "chain": {"exciter": 0.08, "parallel": 0.12, "presence": 1.2, "ratio": 2.6, "prox": 0.0,
-                  "deess_hz": 6200.0, "deess": 0.85, "hpf_f0": 0.70},
+        "blurb": "Natural broadcast warmth & clarity · rich vocal body · articulate speech",
+        "curve": [(50, -3.5), (130, 2.5), (260, 1.5), (700, 0.5), (1800, 1.0), (3200, 1.8), (5500, 1.2), (8500, 0.5), (14000, -1.5)],
+        "treble": 0.10,
+        "warmth": 0.15,
+        "chain": {"exciter": 0.05, "parallel": 0.14, "presence": 0.8, "ratio": 2.5, "prox": 1.5,
+                  "deess_hz": 6200.0, "deess": 0.85, "hpf_f0": 0.50},
     },
-    # Theatrical: clean cinematic narrator voice — zero bass mud, commanding mid-high focus & clarity
+    # Theatrical: commanding cinematic presence — deep warm chest resonance, pristine clarity
     "theatrical": {
         "label": "Theatrical",
-        "blurb": "Clean cinematic presence · zero bass mud · commanding, crystal-clear voice",
-        "curve": [(50, -8.5), (120, -3.5), (300, -4.0), (800, 1.0), (1500, 2.2), (3000, 4.0), (5000, 3.5), (8000, 2.0), (12000, 1.5), (16000, -3.5)],
-        "treble": 0.22,
-        "warmth": 0.05,
-        "chain": {"exciter": 0.14, "parallel": 0.18, "presence": 1.6, "ratio": 3.0, "prox": 0.0,
-                  "deess_hz": 6300.0, "deess": 0.88, "hpf_f0": 0.78},
+        "blurb": "Commanding cinematic presence · deep warm chest resonance · pristine clarity",
+        "curve": [(50, -3.0), (130, 3.5), (250, 2.0), (700, 0.8), (1800, 1.5), (3000, 2.2), (5200, 1.8), (8000, 1.0), (13000, -1.5)],
+        "treble": 0.15,
+        "warmth": 0.20,
+        "chain": {"exciter": 0.08, "parallel": 0.18, "presence": 1.0, "ratio": 2.8, "prox": 2.2,
+                  "deess_hz": 6300.0, "deess": 0.88, "hpf_f0": 0.50},
     },
-    # Crisp Air & Detail: modern HD creator sound — open, articulate top, silky (never harsh) consonants
+    # Crisp Air & Detail: modern HD creator sound — balanced warm low-end, silky smooth presence
     "bass_treble": {
         "label": "Crisp Air & Detail",
-        "blurb": "Modern HD creator sound · open sparkling air · silky consonants",
-        "curve": [(50, -9.0), (140, -3.5), (350, -3.0), (900, 0.0), (2200, 2.0), (4000, 3.2), (7500, 2.0), (11000, 1.5), (16000, -3.0)],
-        "treble": 0.25,
-        "warmth": 0.0,
-        "chain": {"exciter": 0.14, "parallel": 0.10, "presence": 1.0, "ratio": 2.4, "prox": 0.0,
-                  "deess_hz": 6500.0, "deess": 0.90, "hpf_f0": 0.75},
+        "blurb": "Modern HD creator sound · balanced warm low-end · silky smooth presence",
+        "curve": [(50, -3.5), (140, 2.2), (280, 1.2), (800, 0.5), (2000, 1.2), (3600, 2.0), (7000, 1.5), (11000, 1.0), (15000, -1.5)],
+        "treble": 0.15,
+        "warmth": 0.10,
+        "chain": {"exciter": 0.08, "parallel": 0.12, "presence": 0.8, "ratio": 2.4, "prox": 1.2,
+                  "deess_hz": 6500.0, "deess": 0.88, "hpf_f0": 0.52},
     },
-    # Warm Intimate: late-night radio — analog tube colour in the low-mids, smooth rounded top, dense and close
+    # Warm Intimate: late-night radio — rich velvety low-mids, analog tube warmth
     "ultra_bass": {
         "label": "Warm Intimate",
-        "blurb": "Late-night radio · analog tube colour · smooth, close and velvety",
-        "curve": [(50, -7.0), (140, -1.5), (250, 0.0), (500, 1.2), (900, 0.8), (2200, 1.0), (4500, -1.0), (8000, -3.5), (13000, -6.0)],
+        "blurb": "Late-night radio · rich velvety low-mids · analog tube warmth",
+        "curve": [(50, -2.5), (120, 4.5), (240, 3.0), (500, 1.8), (1000, 0.8), (2200, 0.5), (4500, -0.5), (8000, -1.5), (13000, -3.5)],
         "treble": 0.0,
         "warmth": 0.35,
-        "chain": {"exciter": 0.0, "parallel": 0.22, "presence": 0.6, "ratio": 3.0, "prox": 0.0,
-                  "deess_hz": 5800.0, "deess": 0.88, "hpf_f0": 0.65},
+        "chain": {"exciter": 0.0, "parallel": 0.22, "presence": 0.4, "ratio": 2.8, "prox": 2.5,
+                  "deess_hz": 5800.0, "deess": 0.88, "hpf_f0": 0.48},
     },
-    # Crystal Presence: maximum intelligibility — forward, projected, cuts through any playback device
+    # Crystal Presence: maximum intelligibility — forward projection, warm core, clear diction
     "crystal_treble": {
         "label": "Crystal Presence",
-        "blurb": "Maximum intelligibility · forward projection · cuts through phone speakers",
-        "curve": [(70, -9.0), (150, -4.5), (300, -4.5), (600, -1.5), (1400, 2.0), (2800, 4.5), (4200, 4.0), (7000, 1.5), (11000, 1.0), (16000, -3.5)],
-        "treble": 0.28,
-        "warmth": 0.0,
-        "chain": {"exciter": 0.15, "parallel": 0.20, "presence": 1.8, "ratio": 3.2, "prox": 0.0,
-                  "deess_hz": 6400.0, "deess": 0.92, "hpf_f0": 0.85},
+        "blurb": "Intelligible and focused · warm voice core · crystal clear diction",
+        "curve": [(50, -4.0), (140, 2.0), (280, 1.0), (800, 0.5), (1800, 1.5), (3200, 2.5), (5500, 1.8), (8500, 1.0), (14000, -1.5)],
+        "treble": 0.16,
+        "warmth": 0.10,
+        "chain": {"exciter": 0.08, "parallel": 0.16, "presence": 1.2, "ratio": 2.8, "prox": 1.0,
+                  "deess_hz": 6400.0, "deess": 0.90, "hpf_f0": 0.55},
     },
-    # Studio Booth: acoustically treated dead vocal booth — ultra-clean isolation, zero room echo/boxiness
+    # Studio Booth: acoustically treated dead vocal booth — clean warm voice isolation, zero room echo
     "studio_booth": {
         "label": "Studio Booth",
-        "blurb": "Acoustically treated booth · ultra-clean voice isolation · zero room echo",
-        "curve": [(50, -9.0), (130, -3.5), (280, -4.5), (420, -3.0), (1200, 1.8), (3000, 3.5), (5500, 3.0), (8500, 2.0), (12000, 1.5), (16000, -3.5)],
-        "treble": 0.20,
-        "warmth": 0.04,
-        "chain": {"exciter": 0.12, "parallel": 0.16, "presence": 1.5, "ratio": 2.8, "prox": 0.0,
-                  "deess_hz": 6300.0, "deess": 0.88, "hpf_f0": 0.82},
+        "blurb": "Acoustically treated booth · clean warm voice isolation · zero room echo",
+        "curve": [(50, -3.5), (130, 2.5), (260, 1.2), (600, 0.0), (1500, 1.2), (3000, 2.0), (5500, 1.5), (8500, 0.8), (14000, -1.5)],
+        "treble": 0.12,
+        "warmth": 0.15,
+        "chain": {"exciter": 0.06, "parallel": 0.15, "presence": 1.0, "ratio": 2.6, "prox": 1.5,
+                  "deess_hz": 6300.0, "deess": 0.88, "hpf_f0": 0.52},
     },
 }
 
@@ -142,8 +144,6 @@ def podcast_chain_cfg(tone: str, level: str = "enhanced") -> Dict[str, float]:
         base["exciter"] = min(1.0, base.get("exciter", 0.3) * 1.5 + 0.15)
         base["parallel"] = min(0.4, base.get("parallel", 0.15) * 1.5 + 0.05)
         base["presence"] = base.get("presence", 1.5) + 1.0
-    if not podcast_tone_cfg(tone).get("theatre"):
-        base["prox"] = 0.0                                   # bass-free guarantee for every non-Theatrical filter
     return base
 
 # Enhance level: how far the voice is taken beyond "cleaned".
