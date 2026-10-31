@@ -213,6 +213,8 @@ object Enhancer {
                 if (fx.reverbMix > 0.001f) (fx.reverbSize * 1.4).toDouble() else 0.0
             } else if (vocals && fx.reverbMix > 0.001f) {
                 ModeFx.reverbTailSeconds(space)
+            } else if (!vocals && fx.reverbMix > 0.001f) {
+                0.7
             } else 0.0
             val tail = (tailSec * sr).toInt()
             y = process(

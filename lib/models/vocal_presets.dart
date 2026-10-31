@@ -9,8 +9,9 @@ class VocalTone {
   static const bright = VocalTone('bright', 'Bright', 'Airy, forward, sparkly');
   static const deep = VocalTone('deep', 'Deep', 'Weight and body in the low end');
   static const radio = VocalTone('radio', 'Radio', 'Punchy mid-range, broadcast feel');
+  static const dolby = VocalTone('dolby', 'Dolby Spatial', 'Immersive 3D vocal aura · pristine harmonic air · wide spatial depth');
 
-  static const List<VocalTone> all = [natural, smooth, warm, bright, deep, radio];
+  static const List<VocalTone> all = [natural, smooth, warm, bright, deep, radio, dolby];
 }
 
 class VocalSpace {
@@ -23,6 +24,7 @@ class VocalSpace {
   static const plate = VocalSpace('plate', 'Plate', 'Classic vocal shine', stereo: true);
   static const hall = VocalSpace('hall', 'Hall', 'Big and cinematic', stereo: true);
   static const wide = VocalSpace('wide', 'Surround', 'Wide immersive stereo field', stereo: true);
+  static const dolby = VocalSpace('dolby', 'Dolby Atmos', 'Signature 3D immersive surround field', stereo: true);
 
-  static const List<VocalSpace> all = [dry, room, plate, hall, wide];
+  static const List<VocalSpace> all = [dry, room, plate, hall, wide, dolby];
 }

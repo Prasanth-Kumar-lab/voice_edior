@@ -37,6 +37,14 @@ class PodcastTone {
     tag: 'Cinema Clean',
     icon: Icons.movie_filter_rounded,
   );
+  static const dolby = PodcastTone(
+    'dolby',
+    'Dolby Cinema',
+    'Immersive cinema spatial field · dialogue leveling · rich sub-bass & crystal 3D air',
+    proOnly: true,
+    tag: 'Dolby 3D',
+    icon: Icons.spatial_audio_rounded,
+  );
   static const bassTreble = PodcastTone(
     'bass_treble',
     'Crisp Air & Detail',
@@ -73,6 +81,7 @@ class PodcastTone {
   static const List<PodcastTone> all = [
     generalBass,
     theatrical,
+    dolby,
     bassTreble,
     ultraBass,
     crystalTreble,

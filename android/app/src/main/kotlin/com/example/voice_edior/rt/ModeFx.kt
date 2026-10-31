@@ -11,6 +11,8 @@ object ModeFx {
         "general_bass" to floatArrayOf(-0.5f, 2.0f, 0.5f, 0.5f, 1.2f, 1.0f, 0.5f, 0.5f),
         // Theatrical: deep cinematic narrator authority — rich warm voice, zero boom mud, commanding clarity
         "theatrical" to floatArrayOf(-1.0f, 2.5f, 0.0f, 0.8f, 1.5f, 1.2f, 0.8f, 0.5f),
+        // Dolby Cinema: signature Dolby immersive voice — deep controlled sub-bass, clean mud scoop, forward dialogue presence, and ultra-silky crystalline air
+        "dolby" to floatArrayOf(-0.5f, 3.2f, -0.6f, 0.6f, 2.2f, 1.8f, 1.6f, 1.8f),
         // Crisp Air & Detail: modern HD creator sound — warm solid bottom with open, silky top end
         "bass_treble" to floatArrayOf(-0.5f, 2.5f, 0.5f, 0.0f, 1.2f, 2.0f, 1.8f, 1.8f),
         // Warm Intimate: late-night radio — rich velvety analog tube vocal bass, smooth rounded top
@@ -48,12 +50,14 @@ object ModeFx {
         gains[5] += lv.presence * 0.5f
         val warmAmt = when (tone) {
             "ultra_bass" -> 0.32f
+            "dolby" -> 0.22f
             "theatrical" -> 0.18f
             "general_bass" -> 0.15f
             "studio_booth" -> 0.12f
             else -> 0.14f
         }
         val exAmt = when (tone) {
+            "dolby" -> (lv.exciter + 0.18f).coerceAtMost(0.48f)
             "crystal_treble" -> (lv.exciter + 0.15f).coerceAtMost(0.45f)
             "bass_treble" -> (lv.exciter + 0.12f).coerceAtMost(0.40f)
             "theatrical" -> (lv.exciter + 0.08f).coerceAtMost(0.35f)
@@ -62,6 +66,7 @@ object ModeFx {
             else -> lv.exciter
         }
         val compRatio = when (tone) {
+            "dolby" -> (lv.ratio + 0.35f).coerceAtMost(3.2f)
             "crystal_treble", "theatrical" -> (lv.ratio + 0.3f).coerceAtMost(3.2f)
             "studio_booth", "ultra_bass" -> (lv.ratio + 0.2f).coerceAtMost(3.0f)
             else -> lv.ratio
@@ -70,16 +75,21 @@ object ModeFx {
         val hpf = when (tone) {
             "crystal_treble" -> 72f
             "studio_booth" -> 68f
-            "theatrical", "bass_treble" -> 65f
+            "dolby", "theatrical", "bass_treble" -> 65f
             else -> 60f
         }
-        val deEssAmt = if (tone == "studio_booth" || tone == "theatrical") 0.70f else 0.65f
+        val deEssAmt = if (tone == "studio_booth" || tone == "theatrical" || tone == "dolby") 0.70f else 0.65f
         return VocalFx(
             hpfHz = hpf, denoise = 1.0f, gateOn = true, gateThresholdDb = -52f,
             deEssOn = true, deEss = deEssAmt, deEssHz = 6400f,
             eqOn = true, eqGains = gains,
             compOn = true, compThresholdDb = -22f, compRatio = compRatio, compAttackMs = 12f, compReleaseMs = 180f, compMakeupDb = 0f,
-            warmth = warmAmt, exciter = exAmt, reverbMix = 0f, reverbSize = 0.30f, reverbDamp = 0.5f, reverbPreMs = 14f, limiterCeilingDb = -1f,
+            warmth = warmAmt, exciter = exAmt,
+            reverbMix = if (tone == "dolby") 0.15f else 0f,
+            reverbSize = if (tone == "dolby") 0.52f else 0.30f,
+            reverbDamp = if (tone == "dolby") 0.42f else 0.5f,
+            reverbPreMs = if (tone == "dolby") 18f else 14f,
+            limiterCeilingDb = -1f,
         )
     }
 
@@ -91,6 +101,8 @@ object ModeFx {
         "bright" to floatArrayOf(-0.5f, 1.5f, -0.5f, 0.5f, 1.5f, 2.0f, 2.0f, 2.0f),
         "deep" to floatArrayOf(1.0f, 4.5f, 2.5f, 0f, 0.5f, 0f, -0.5f, -0.5f),
         "radio" to floatArrayOf(-1.5f, 2.0f, 0.5f, 1.5f, 2.0f, 1.0f, 0f, -0.5f),
+        // Dolby Spatial: immersive 3D spatial field, harmonic air sheen, clear vocal presence & full-bodied resonance
+        "dolby" to floatArrayOf(0.0f, 3.0f, -0.6f, 0.5f, 2.0f, 1.8f, 2.2f, 2.4f),
     )
 
     /** Space presets: reverb mix, size, damping, pre-delay. */
@@ -102,9 +114,10 @@ object ModeFx {
         "plate" to Space(0.18f, 0.50f, 0.35f, 20f),
         "hall" to Space(0.22f, 0.70f, 0.55f, 30f),
         "wide" to Space(0.20f, 0.55f, 0.35f, 18f),
+        "dolby" to Space(0.24f, 0.60f, 0.38f, 16f),
     )
 
-    fun reverbTailSeconds(space: String): Double = when (space) { "dry" -> 0.0; "room" -> 0.6; "hall" -> 1.8; else -> 1.2 }
+    fun reverbTailSeconds(space: String): Double = when (space) { "dry" -> 0.0; "room" -> 0.6; "hall" -> 1.8; "dolby" -> 1.4; else -> 1.2 }
 
     fun vocals(v: VoiceInfo, tone: String = "natural", space: String = "dry"): VocalFx {
         val f0 = if (v.f0Median > 0f) v.f0Median else 180f
@@ -119,10 +132,12 @@ object ModeFx {
         val sp = spaces[space] ?: spaces.getValue("dry")
         val warmAmt = when (tone) {
             "warm", "deep" -> 0.30f
+            "dolby" -> 0.24f
             "smooth" -> 0.22f
             else -> 0.16f
         }
         val exAmt = when (tone) {
+            "dolby" -> 0.32f
             "bright" -> 0.30f
             "radio" -> 0.20f
             "natural" -> 0.15f

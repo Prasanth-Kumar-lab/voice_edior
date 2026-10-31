@@ -2071,7 +2071,7 @@ class _PodcastPickers extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
                       borderRadius: AppRadius.chip,
-                      color: tone.id == 'theatrical'
+                      color: (tone.id == 'theatrical' || tone.id == 'dolby')
                           ? AppColors.warning.withValues(alpha: 0.2)
                           : AppColors.accent.withValues(alpha: 0.2),
                     ),
@@ -2080,7 +2080,7 @@ class _PodcastPickers extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 9.5,
                         fontWeight: FontWeight.w800,
-                        color: tone.id == 'theatrical'
+                        color: (tone.id == 'theatrical' || tone.id == 'dolby')
                             ? AppColors.warning
                             : AppColors.accentBright,
                       ),

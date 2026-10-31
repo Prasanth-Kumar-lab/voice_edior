@@ -31,6 +31,10 @@ TONES: Dict[str, Dict[str, object]] = {
         "label": "Radio", "blurb": "Punchy mid-range, broadcast feel with clear voice base",
         "curve": [(70, -1.5), (150, 1.5), (800, 1.5), (2000, 2.2), (4000, 1.8), (8000, -0.5), (14000, -2.5)],
     },
+    "dolby": {
+        "label": "Dolby Spatial", "blurb": "Immersive 3D vocal aura · pristine harmonic air · wide spatial depth",
+        "curve": [(60, -0.5), (140, 3.0), (260, 1.8), (600, -0.6), (1200, 0.5), (2800, 1.8), (5500, 1.6), (8500, 2.2), (13000, 2.5), (17000, 1.0)],
+    },
 }
 
 # Space presets: reverb time (s), pre-delay (ms), wet level re voice (dB), damping (0 bright .. 1 dark), stereo width (0..1)
@@ -40,6 +44,7 @@ SPACES: Dict[str, Dict[str, object]] = {
     "plate": {"label": "Plate", "blurb": "Classic vocal shine", "t60": 1.1, "pre": 22.0, "mix": -21.0, "damp": 0.3, "width": 0.7},
     "hall": {"label": "Hall", "blurb": "Big and cinematic", "t60": 2.0, "pre": 35.0, "mix": -20.0, "damp": 0.55, "width": 0.9},
     "wide": {"label": "Surround", "blurb": "Wide immersive stereo field", "t60": 1.0, "pre": 18.0, "mix": -19.0, "damp": 0.3, "width": 1.0},
+    "dolby": {"label": "Dolby Atmos", "blurb": "Signature 3D immersive surround field", "t60": 1.3, "pre": 20.0, "mix": -18.5, "damp": 0.40, "width": 1.0},
 }
 
 
@@ -80,6 +85,18 @@ PODCAST_TONES: Dict[str, Dict[str, object]] = {
         "warmth": 0.20,
         "chain": {"exciter": 0.08, "parallel": 0.18, "presence": 1.0, "ratio": 2.8, "prox": 2.2,
                   "deess_hz": 6300.0, "deess": 0.88, "hpf_f0": 0.50},
+    },
+    # Dolby Cinema: signature Dolby immersive voice — deep controlled sub-bass, clean mud scoop, forward dialogue presence, and ultra-silky crystalline air
+    "dolby": {
+        "label": "Dolby Cinema",
+        "blurb": "Immersive cinema spatial field · dialogue leveling · rich sub-bass & crystal 3D air",
+        "curve": [(50, -3.0), (130, 3.2), (250, 1.8), (600, -0.6), (1800, 1.2), (3000, 2.2), (5500, 1.8), (8500, 1.6), (13000, 1.8), (17000, 0.5)],
+        "treble": 0.20,
+        "warmth": 0.22,
+        "theatre": True,
+        "space": "dolby",
+        "chain": {"exciter": 0.16, "parallel": 0.20, "presence": 1.4, "ratio": 2.8, "prox": 2.2,
+                  "deess_hz": 6400.0, "deess": 0.88, "hpf_f0": 0.50},
     },
     # Crisp Air & Detail: modern HD creator sound — balanced warm low-end, silky smooth presence
     "bass_treble": {

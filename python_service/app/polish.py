@@ -456,6 +456,8 @@ def voice_treble(x: np.ndarray, sr: int = 48000, amount: float = 0.6) -> np.ndar
 
 def podcast_space(x: np.ndarray, space_type: str, sr: int = 48000) -> np.ndarray:
     """Stereo spatial acoustics for Podcast filters, applied after the speech pause gate."""
+    if space_type == "dolby":
+        return apply_space(x, {"t60": 1.25, "pre": 20.0, "mix": -18.0, "damp": 0.42, "width": 1.0}, sr)
     if space_type == "theatre":
         return theatre_space(x, sr)
     if space_type == "booth":
