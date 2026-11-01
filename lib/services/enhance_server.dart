@@ -65,11 +65,15 @@ class EnhanceServer extends GetxService {
 
   String? _accessToken;
   String? _refreshToken;
+  Map<String, dynamic>? _cachedUser;
   bool _refreshing = false;
+  final Completer<void> _initCompleter = Completer<void>();
 
   Dio get dio => _dio;
   String? get accessToken => _accessToken;
   String? get refreshToken => _refreshToken;
+  Map<String, dynamic>? get cachedUser => _cachedUser;
+  Future<void> get initFuture => _initCompleter.future;
   bool get isAuthenticated => _accessToken != null && _accessToken!.isNotEmpty;
 
   List<String> get _hosts {
@@ -121,22 +125,37 @@ class EnhanceServer extends GetxService {
             jsonDecode(await tf.readAsString()) as Map<String, dynamic>;
         _accessToken = map['access_token'] as String?;
         _refreshToken = map['refresh_token'] as String?;
+        if (map['user'] is Map) {
+          _cachedUser = Map<String, dynamic>.from(map['user'] as Map);
+        }
       }
     } catch (_) {}
+    if (!_initCompleter.isCompleted) {
+      _initCompleter.complete();
+    }
     await ping();
   }
 
-  Future<void> setTokens({required String? accessToken, required String? refreshToken}) async {
+  Future<void> setTokens({
+    required String? accessToken,
+    required String? refreshToken,
+    Map<String, dynamic>? user,
+  }) async {
     _accessToken = accessToken;
     _refreshToken = refreshToken;
+    if (user != null) {
+      _cachedUser = user;
+    }
     try {
       final File tf = await _tokenFile();
       if (accessToken == null || accessToken.isEmpty) {
+        _cachedUser = null;
         if (tf.existsSync()) await tf.delete();
       } else {
         await tf.writeAsString(jsonEncode({
           'access_token': accessToken,
           'refresh_token': refreshToken,
+          if (_cachedUser != null) 'user': _cachedUser,
         }));
       }
     } catch (_) {}

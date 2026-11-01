@@ -325,12 +325,6 @@ class _SelectPage extends StatelessWidget {
                 _ModeCard(mode: EnhanceMode.vocals, selected: c.mode.value == EnhanceMode.vocals, onTap: () => c.setMode(EnhanceMode.vocals)),
               ],
             )),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: Obx(() => c.mode.value == EnhanceMode.vocals ? _VocalPickers(c) : _PodcastPickers(c)),
-        ),
         const SizedBox(height: AppSpacing.md),
         Obx(
           () => Wrap(

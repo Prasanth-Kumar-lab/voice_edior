@@ -2,11 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:get/get.dart';
+import '../controllers/admin_controller.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radius.dart';
 import '../theme/app_shadows.dart';
 import '../theme/app_spacing.dart';
 import 'login_view.dart';
+import 'main_shell_view.dart';
 
 class SplashView extends StatefulWidget {
   const SplashView({super.key});
@@ -16,22 +18,84 @@ class SplashView extends StatefulWidget {
 }
 
 class _SplashViewState extends State<SplashView> {
-  Timer? _timer;
+  String _statusText = 'Checking your session…';
+  bool _isChecking = true;
+  Timer? _slowWakeupTimer;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer(const Duration(milliseconds: 2800), _goNext);
+    _startSessionCheck();
   }
 
-  void _goNext() {
+  Future<void> _startSessionCheck() async {
+    _slowWakeupTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted && _isChecking) {
+        setState(() => _statusText = 'Waking up the studio…');
+      }
+    });
+
+    final DateTime startTime = DateTime.now();
+    final AdminController adm = Get.find<AdminController>();
+    final bool valid = await adm.verifyPersistedSession();
+    _slowWakeupTimer?.cancel();
+
+    final int elapsed = DateTime.now().difference(startTime).inMilliseconds;
+    if (elapsed < 1400) {
+      await Future<void>.delayed(Duration(milliseconds: 1400 - elapsed));
+    }
+
     if (!mounted) return;
-    Get.off(() => const LoginView(), transition: Transition.fadeIn, duration: const Duration(milliseconds: 500));
+
+    if (valid) {
+      final String name = adm.currentUser.value?.name ?? 'Creator';
+      setState(() {
+        _isChecking = false;
+        _statusText = 'Welcome back, $name';
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (!mounted) return;
+      Get.off(
+        () => const MainShellView(),
+        transition: Transition.fadeIn,
+        duration: const Duration(milliseconds: 500),
+      );
+    } else {
+      setState(() {
+        _isChecking = false;
+        _statusText = 'Studio ready';
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      if (!mounted) return;
+      Get.off(
+        () => const LoginView(),
+        transition: Transition.fadeIn,
+        duration: const Duration(milliseconds: 500),
+      );
+    }
+  }
+
+  void _skip() {
+    _slowWakeupTimer?.cancel();
+    final AdminController adm = Get.find<AdminController>();
+    if (adm.currentUser.value != null) {
+      Get.off(
+        () => const MainShellView(),
+        transition: Transition.fadeIn,
+        duration: const Duration(milliseconds: 350),
+      );
+    } else {
+      Get.off(
+        () => const LoginView(),
+        transition: Transition.fadeIn,
+        duration: const Duration(milliseconds: 350),
+      );
+    }
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _slowWakeupTimer?.cancel();
     super.dispose();
   }
 
@@ -82,10 +146,7 @@ class _SplashViewState extends State<SplashView> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      onPressed: () {
-                        _timer?.cancel();
-                        _goNext();
-                      },
+                      onPressed: _skip,
                       child: Text('Skip →', style: t.labelLarge?.copyWith(color: AppColors.muted(b))),
                     ),
                   ),
@@ -183,6 +244,38 @@ class _SplashViewState extends State<SplashView> {
                                   curve: Curves.easeInOut,
                                 ),
                           ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 260),
+                    child: Row(
+                      key: ValueKey<String>(_statusText),
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_isChecking)
+                          Container(
+                            width: 7,
+                            height: 7,
+                            margin: const EdgeInsets.only(right: 8),
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: AppColors.accentBright,
+                            ),
+                          )
+                              .animate(onPlay: (c) => c.repeat(reverse: true))
+                              .scale(begin: const Offset(0.7, 0.7), end: const Offset(1.3, 1.3)),
+                        Text(
+                          _statusText,
+                          style: t.bodySmall?.copyWith(
+                            color: _statusText.startsWith('Welcome back')
+                                ? AppColors.accentBright
+                                : AppColors.muted(b),
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 0.2,
+                          ),
+                        ),
                       ],
                     ),
                   ),

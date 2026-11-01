@@ -415,11 +415,12 @@ class AdminController extends GetxController {
       );
       if (res.statusCode == 200 && res.data is Map) {
         final Map<String, dynamic> body = Map<String, dynamic>.from(res.data as Map);
+        final Map<String, dynamic> uMap = Map<String, dynamic>.from(body['user'] as Map);
         await server.setTokens(
           accessToken: body['access_token'] as String?,
           refreshToken: body['refresh_token'] as String?,
+          user: uMap,
         );
-        final Map<String, dynamic> uMap = Map<String, dynamic>.from(body['user'] as Map);
         currentUser.value = AdminUser.fromJson(uMap);
         await syncFromMongo();
         return null;
@@ -455,11 +456,12 @@ class AdminController extends GetxController {
       );
       if (res.statusCode == 200 && res.data is Map) {
         final Map<String, dynamic> body = Map<String, dynamic>.from(res.data as Map);
+        final Map<String, dynamic> uMap = Map<String, dynamic>.from(body['user'] as Map);
         await server.setTokens(
           accessToken: body['access_token'] as String?,
           refreshToken: body['refresh_token'] as String?,
+          user: uMap,
         );
-        final Map<String, dynamic> uMap = Map<String, dynamic>.from(body['user'] as Map);
         currentUser.value = AdminUser.fromJson(uMap);
         await syncFromMongo();
         return null;
@@ -475,6 +477,86 @@ class AdminController extends GetxController {
   Future<void> logout() async {
     await server.clearTokens();
     currentUser.value = null;
+  }
+
+  /// Verifies locally saved JWT credentials with the API on app launch.
+  /// If valid or refreshed, restores currentUser and returns true.
+  Future<bool> verifyPersistedSession() async {
+    await server.initFuture;
+    if (!server.isAuthenticated && (server.refreshToken == null || server.refreshToken!.isEmpty)) {
+      return false;
+    }
+
+    try {
+      await server.ping();
+      final Response<dynamic> res = await server.dio.get<dynamic>(
+        '${server.host}/api/auth/me',
+        options: Options(
+          headers: {
+            if (server.accessToken != null && server.accessToken!.isNotEmpty)
+              'Authorization': 'Bearer ${server.accessToken}',
+          },
+        ),
+      );
+      if (res.statusCode == 200 && res.data is Map) {
+        final Map<String, dynamic> body = Map<String, dynamic>.from(res.data as Map);
+        if (body['user'] is Map) {
+          final Map<String, dynamic> uMap = Map<String, dynamic>.from(body['user'] as Map);
+          currentUser.value = AdminUser.fromJson(uMap);
+          await server.setTokens(
+            accessToken: server.accessToken,
+            refreshToken: server.refreshToken,
+            user: uMap,
+          );
+          syncFromMongo();
+          return true;
+        }
+      }
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 401) {
+        final bool refreshed = await server.tryRefreshToken();
+        if (refreshed) {
+          try {
+            final Response<dynamic> retryRes = await server.dio.get<dynamic>(
+              '${server.host}/api/auth/me',
+              options: Options(
+                headers: {
+                  if (server.accessToken != null && server.accessToken!.isNotEmpty)
+                    'Authorization': 'Bearer ${server.accessToken}',
+                },
+              ),
+            );
+            if (retryRes.statusCode == 200 && retryRes.data is Map) {
+              final Map<String, dynamic> body = Map<String, dynamic>.from(retryRes.data as Map);
+              if (body['user'] is Map) {
+                final Map<String, dynamic> uMap = Map<String, dynamic>.from(body['user'] as Map);
+                currentUser.value = AdminUser.fromJson(uMap);
+                await server.setTokens(
+                  accessToken: server.accessToken,
+                  refreshToken: server.refreshToken,
+                  user: uMap,
+                );
+                syncFromMongo();
+                return true;
+              }
+            }
+          } catch (_) {}
+        }
+        await logout();
+        return false;
+      }
+      // Server down or offline: use cached user data if available
+      if (server.cachedUser != null) {
+        currentUser.value = AdminUser.fromJson(server.cachedUser!);
+        return true;
+      }
+    } catch (_) {
+      if (server.cachedUser != null) {
+        currentUser.value = AdminUser.fromJson(server.cachedUser!);
+        return true;
+      }
+    }
+    return false;
   }
 
   Future<void> subscribeCurrentUser(AdminSubscriptionPlan plan, {required bool yearly}) async {
