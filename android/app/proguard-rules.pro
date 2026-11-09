@@ -13,3 +13,8 @@
 -keep class com.arthenica.ffmpegkit.** { *; }
 -dontwarn com.arthenica.ffmpegkit.**
 -keep class com.ryanheise.just_audio.** { *; }
+
+# Suppress Play Store Core deferred components warnings (R8)
+-dontwarn com.google.android.play.core.**
+-dontwarn io.flutter.embedding.android.FlutterPlayStoreSplitApplication
+-dontwarn io.flutter.embedding.engine.deferredcomponents.**
