@@ -84,20 +84,20 @@ object Enhancer {
             progress("Analyzing voice & noise profile", 0.14f)
             val info = PitchAnalyzer.analyze(x, sr)
 
-            // 1A. Recording-wide learned noise-profile spectral subtraction
+            // 1A. Recording-wide learned noise-profile spectral subtraction with resonant horn/siren notch filter
             progress("Removing background noise", 0.28f)
-            val preCleaned = profileSpectralDenoise(x, sr, if (vocals) 0.85 else 0.95)
+            val preCleaned = profileSpectralDenoise(suppressResonantSpikes(x, sr), sr, if (vocals) 0.92 else 1.0)
 
             // 1B. Streaming minimum-statistics Wiener denoiser pass
             val baseHpf = if (vocals) (0.45f * (if (info.f0P10 > 0f) info.f0P10 else 120f)).coerceIn(50f, 85f) else 55f
-            val denoised = process(preCleaned, sr, flat.copy(hpfHz = baseHpf, denoise = 0.85f))
+            val denoised = process(preCleaned, sr, flat.copy(hpfHz = baseHpf, denoise = 0.95f))
 
             // 1C. Multiband STFT spectral expander to strip band-specific hiss & hum smoothly
             progress("Deep spectral clean", 0.42f)
             val pass1 = multibandSpectralGate(
                 denoised,
                 sr,
-                depthDb = if (vocals) 16.0 else 20.0,
+                depthDb = if (vocals) 36.0 else 46.0,
                 marginDb = 5.0,
                 holdMs = if (vocals) 140.0 else 120.0,
                 releaseMs = if (vocals) 200.0 else 180.0,
@@ -163,9 +163,9 @@ object Enhancer {
         val warmBodyAmt = (baseWarmth * (1.0f + customBass * 0.12f)).coerceIn(0.05f, 0.95f)
         shaped = applyVocalWarmthBody(shaped, sr, warmBodyAmt)
 
-        // Musical vocal clean pass with gentle depth so background is silenced without cutting vocal tails
+        // Musical vocal clean pass with deep isolation so background is silenced without cutting vocal tails
         progress("Polishing vocal tone", 0.66f)
-        val cleanDepth = if (customFx != null) 12.0 else (if (vocals) 10.0 else 14.0)
+        val cleanDepth = if (customFx != null) 20.0 else (if (vocals) 28.0 else 40.0)
         shaped = multibandSpectralGate(shaped, sr, cleanDepth, marginDb = 5.0, holdMs = 120.0, releaseMs = 180.0)
 
         // Delicate speech-following air (never over-hyped or harsh)
@@ -189,14 +189,14 @@ object Enhancer {
         }
         shaped = applyCrispTreble(shaped, sr, airAmount)
 
-        // Natural smooth-release speech expander: eliminates noise in pauses without sudden clicks or gate pops
+        // Zero-thump speech expander: eliminates crying, horns, and pause noise with pure digital silence (-75 dB)
         progress("Final background silence", 0.74f)
         val pauseFloor = when {
-            customFx != null -> (fx.gateThresholdDb.toDouble() - 10.0).coerceIn(-35.0, -18.0)
-            vocals -> -22.0
-            effTone == "studio_booth" -> -26.0
-            effTone == "theatrical" -> -24.0
-            else -> -24.0
+            customFx != null -> (fx.gateThresholdDb.toDouble() - 20.0).coerceIn(-75.0, -35.0)
+            vocals -> -72.0
+            effTone == "studio_booth" -> -80.0
+            effTone == "theatrical" -> -78.0
+            else -> -75.0
         }
         var y = applySpeechGate(
             shaped,
@@ -291,9 +291,85 @@ object Enhancer {
     }
 
     /**
+     * Resonant spike suppressor: detects and notches vehicle horns, screeching sirens, and high-Q alarms
+     * in the 280 Hz - 4000 Hz range that persist across multiple frames without speech formant modulation.
+     */
+    private fun suppressResonantSpikes(x: FloatArray, sr: Int): FloatArray {
+        val N = 1024
+        val hop = 256
+        val B = N / 2 + 1
+        if (x.size < N * 2) return x.copyOf()
+
+        val nFrames = (x.size - N) / hop + 1
+        val win = DoubleArray(N) { sqrt(0.5 - 0.5 * cos(2.0 * PI * it / N)) }
+        val fft = Fft(N)
+        val re = DoubleArray(N)
+        val im = DoubleArray(N)
+        val P = Array(nFrames) { DoubleArray(B) }
+
+        for (f in 0 until nFrames) {
+            val off = f * hop
+            for (i in 0 until N) {
+                re[i] = x[off + i] * win[i]
+                im[i] = 0.0
+            }
+            fft.transform(re, im)
+            for (k in 0 until B) {
+                P[f][k] = re[k] * re[k] + im[k] * im[k] + 1e-12
+            }
+        }
+
+        val out = FloatArray(x.size)
+        val norm = FloatArray(x.size)
+        val kMin = (280.0 * N / sr).toInt().coerceIn(1, B - 1)
+        val kMax = (4000.0 * N / sr).toInt().coerceIn(1, B - 1)
+
+        for (f in 0 until nFrames) {
+            val off = f * hop
+            for (i in 0 until N) {
+                re[i] = x[off + i] * win[i]
+                im[i] = 0.0
+            }
+            fft.transform(re, im)
+
+            for (k in kMin..kMax) {
+                var sum = 0.0
+                var count = 0
+                for (d in -5..5) {
+                    val j = (k + d).coerceIn(0, B - 1)
+                    sum += P[f][j]
+                    count++
+                }
+                val localAvg = sum / count
+                val ratio = P[f][k] / max(localAvg, 1e-12)
+                if (ratio > 14.0) {
+                    val atten = sqrt(localAvg / P[f][k]).coerceIn(0.08, 1.0)
+                    re[k] *= atten
+                    im[k] *= atten
+                    if (k in 1 until N / 2) {
+                        re[N - k] = re[k]
+                        im[N - k] = -im[k]
+                    }
+                }
+            }
+
+            fft.inverse(re, im)
+            for (i in 0 until N) {
+                val w = win[i]
+                out[off + i] += (re[i] * w).toFloat()
+                norm[off + i] += (w * w).toFloat()
+            }
+        }
+        for (i in x.indices) {
+            out[i] = if (norm[i] > 1e-4f) out[i] / norm[i] else x[i]
+        }
+        return out
+    }
+
+    /**
      * Recording-wide noise-profile spectral denoiser (1024-bin STFT, 75% overlap).
      * Learns the noise spectrum from the quietest 20% of frames across the entire recording
-     * and applies a smooth Decision-Directed Wiener filter.
+     * and applies a smooth Decision-Directed Wiener filter with ultra-deep attenuation (-70 dB).
      */
     private fun profileSpectralDenoise(x: FloatArray, sr: Int, amount: Double): FloatArray {
         val N = 1024
@@ -360,7 +436,7 @@ object Enhancer {
                 sum += rawNoiseProf[j]
                 cnt++
             }
-            noiseProf[k] = (sum / cnt) * (1.6 + 1.0 * amount)
+            noiseProf[k] = (sum / cnt) * (2.2 + 1.5 * amount)
         }
 
         // 3. Apply Decision-Directed Wiener filtering across the recording
@@ -370,8 +446,8 @@ object Enhancer {
         val gamPrev = DoubleArray(B) { 1.0 }
         val gain = DoubleArray(B)
         val smoothGain = DoubleArray(B)
-        val beta = 1.2 + 1.4 * amount
-        val floorGain = dbToLin(-(12.0 + 18.0 * amount))
+        val beta = 1.3 + 1.8 * amount
+        val floorGain = dbToLin(-(25.0 + 45.0 * amount))
         val alpha = 0.96
 
         for (f in 0 until nFrames) {

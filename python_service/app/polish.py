@@ -236,13 +236,12 @@ def plate(x: np.ndarray, sr: int = 48000, mix_db: float = -22.0, t60: float = 1.
 _GATE_EDGES = [0, 120, 250, 500, 1000, 2000, 3200, 5000, 8000, 12000, 24001]
 
 
-def spectral_gate(x: np.ndarray, sr: int = 48000, depth_db: float = 30.0, margin_db: float = 5.0,
+def spectral_gate(x: np.ndarray, sr: int = 48000, depth_db: float = 55.0, margin_db: float = 6.0,
                   hold_ms: float = 80.0, release_ms: float = 160.0, voiced: Optional[np.ndarray] = None) -> np.ndarray:
-    """Per-band expander in the STFT domain.
+    """Per-band expander in the STFT domain with deep attenuation (up to -60 dB).
 
-    Each of 10 bands learns its *own* noise floor (8th percentile of its energy over the file) and is closed
-    smoothly whenever it sits near that floor — in the pauses *and* in bands the voice does not occupy
-    (e.g. hiss above 8 kHz while someone speaks). Fast open, long hold + slow release → no pumping.
+    Each of 10 bands learns its *own* noise floor and is closed smoothly whenever
+    it sits near that floor — completely eliminating hiss, hum, and off-band background noise.
     """
     N, hop = 1024, 256
     f, t, X = stft(x, sr, window="hann", nperseg=N, noverlap=N - hop, boundary="zeros", padded=True)
@@ -254,13 +253,13 @@ def spectral_gate(x: np.ndarray, sr: int = 48000, depth_db: float = 30.0, margin
     thr = floor + margin_db
     # soft knee: fully closed at/below thr, fully open 6 dB above it
     open_amt = np.clip((E - thr) / 6.0, 0.0, 1.0)
-    # voicing keeps the low/mid bands where the voice lives open without letting floor noise through
+    # voicing only protects bands where speech is actually active
     if voiced is not None and len(voiced):
         frame_t = t / 0.01
         v = np.interp(frame_t, np.arange(len(voiced)), voiced.astype(float)) > 0.5
         keep = np.zeros(nb)
-        keep[2:7] = 0.4
-        open_amt = np.maximum(open_amt, keep[:, None] * v[None, :] * (E > floor + 1.5))
+        keep[2:7] = 0.25
+        open_amt = np.maximum(open_amt, keep[:, None] * v[None, :] * (E > floor + 4.5))
     # hold + asymmetric smoothing (per band, along time)
     hold = max(1, int(hold_ms * 1e-3 * sr / hop))
     a_open = np.exp(-1.0 / max(1.0, 0.008 * sr / hop))
@@ -465,10 +464,10 @@ def podcast_space(x: np.ndarray, space_type: str, sr: int = 48000) -> np.ndarray
     return x
 
 
-def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -24.0,
-                      hold_ms: float = 160.0, look_ms: float = 16.0) -> np.ndarray:
-    """Zero-thump downward expander: gently sinks pause noise to a transparent floor
-    without gate chatter, clicking, or low-frequency transient thumps.
+def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -80.0,
+                      hold_ms: float = 160.0, look_ms: float = 20.0) -> np.ndarray:
+    """Zero-thump speech expander: drops pause noise down to complete silence (-80 dB)
+    between spoken words, eliminating crying, horns, and background noise without gate chatter or clicks.
     """
     hop = int(0.003 * sr)
     win = int(0.025 * sr)
@@ -513,7 +512,7 @@ def apply_speech_gate(x: np.ndarray, sr: int = 48000, pause_floor_db: float = -2
     centers = np.arange(len(smooth_env)) * hop + win // 2
     samp_gain = np.interp(np.arange(n), centers, smooth_env).astype(np.float32)
 
-    pause_floor_db = max(-26.0, pause_floor_db)
+    pause_floor_db = max(-95.0, pause_floor_db)
     pause_floor = 10 ** (pause_floor_db / 20)
     mult = pause_floor + (1.0 - pause_floor) * samp_gain
     out = (x * mult).astype(np.float32)

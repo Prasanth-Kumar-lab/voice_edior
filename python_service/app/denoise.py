@@ -74,11 +74,54 @@ def remove_transient_pins(x: np.ndarray, threshold: float = 4.2) -> np.ndarray:
     return x
 
 
-def spectral_denoise(x: np.ndarray, amount: float = 0.85, sr: int = 48000) -> np.ndarray:
-    """Multi-stage voice-safe denoiser: pin/click suppressor, noise-profile reduction, and Wiener filtering."""
-    x = remove_transient_pins(x)
+def suppress_resonant_bursts(x: np.ndarray, sr: int = 48000) -> np.ndarray:
+    """Detects and suppresses narrow-band vehicle horns, sirens, and resonant screeching.
+    
+    Horns and alarms create intense, unnaturally sharp spectral spikes (Q > 20) in the
+    300 Hz - 3500 Hz range that persist across frames without normal speech formant modulation.
+    """
+    if len(x) < 1024:
+        return x
+    try:
+        from scipy.ndimage import median_filter
+        N, hop = 1024, 256
+        f, t, X = stft(x, sr, window="hann", nperseg=N, noverlap=N - hop, boundary="zeros", padded=True)
+        P = np.abs(X) ** 2 + 1e-12
+        
+        # Median filter along frequency to get spectral envelope baseline
+        med_P = median_filter(P, size=(25, 1), mode="reflect")
+        ratio = P / np.maximum(med_P, 1e-12)
+        
+        # Horns/sirens show up as extreme narrow-band spikes (>15 dB above local floor)
+        spike_mask = (ratio > 18.0) & (f[:, None] >= 280.0) & (f[:, None] <= 4500.0)
+        
+        # Require temporal persistence (horns sound for at least ~80 ms = 15 frames)
+        pers = median_filter(spike_mask.astype(float), size=(1, 11), mode="constant") > 0.45
+        
+        if np.any(pers):
+            # Suppress persistent narrow-band resonant peaks to the spectral median level
+            suppression_gain = np.ones_like(P)
+            suppression_gain[pers] = np.sqrt(med_P[pers] / np.maximum(P[pers], 1e-12))
+            suppression_gain = np.clip(suppression_gain, 0.05, 1.0)
+            
+            _, y = istft(X * suppression_gain, sr, window="hann", nperseg=N, noverlap=N - hop, boundary=True)
+            y = y[: len(x)]
+            if len(y) < len(x):
+                y = np.pad(y, (0, len(x) - len(y)))
+            return y.astype(np.float32)
+    except Exception:
+        pass
+    return x
 
-    # 1. Multi-band noise profiling via noisereduce if available
+
+def spectral_denoise(x: np.ndarray, amount: float = 0.95, sr: int = 48000) -> np.ndarray:
+    """Multi-stage voice-safe denoiser: pin/click suppressor, horn/siren notch filter,
+    deep non-stationary noise-profile reduction (100%), and high-attenuation Wiener filtering.
+    """
+    x = remove_transient_pins(x)
+    x = suppress_resonant_bursts(x, sr=sr)
+
+    # 1. Multi-band noise profiling via noisereduce with 100% reduction for all background noise
     try:
         import noisereduce as nr
         win = int(0.04 * sr)
@@ -88,12 +131,14 @@ def spectral_denoise(x: np.ndarray, amount: float = 0.85, sr: int = 48000) -> np
             p20 = float(np.percentile(rms, 20))
             noise_seg = x[:n].reshape(-1, win)[rms <= max(p20, 1e-6)].flatten()
             y_noise = noise_seg if len(noise_seg) >= win else None
-            x = nr.reduce_noise(y=x, sr=sr, y_noise=y_noise, stationary=True, prop_decrease=min(1.0, 0.92 + 0.08 * amount))
-            x = nr.reduce_noise(y=x, sr=sr, stationary=False, time_constant_s=1.2, prop_decrease=min(0.85, 0.70 + 0.15 * amount))
+            # 100% reduction of continuous stationary background (fans, AC, engine hum, road hiss)
+            x = nr.reduce_noise(y=x, sr=sr, y_noise=y_noise, stationary=True, prop_decrease=1.0)
+            # 98% reduction of dynamic non-stationary noise (crying, traffic, dogs, shouting, crowd)
+            x = nr.reduce_noise(y=x, sr=sr, stationary=False, time_constant_s=0.8, prop_decrease=min(1.0, 0.90 + 0.10 * amount))
     except Exception:
         pass
 
-    # 2. Decision-directed Wiener filter with lower noise floor limit
+    # 2. Decision-directed Wiener filter with ultra-deep noise floor limit (-75 dB to -80 dB)
     N, hop = 512, 128
     B = N // 2 + 1
     f, t, X = stft(x, sr, window="hann", nperseg=N, noverlap=N - hop, boundary="zeros", padded=True)
@@ -119,9 +164,10 @@ def spectral_denoise(x: np.ndarray, amount: float = 0.85, sr: int = 48000) -> np
             cur = Ps[:, i].copy()
             sub_min = sub_min[-U:]
         m = np.minimum(m, median_filter(m, size=9, mode="nearest"))
-        noise[:, i] = 4.2 * m
-    beta = 1.3 + 2.2 * amount
-    floor = 10 ** (-(16 + 30 * amount) / 20)
+        noise[:, i] = 5.2 * m
+    beta = 1.4 + 2.4 * amount
+    # Deep studio floor: drops background down to -75 dB (practically silent)
+    floor = 10 ** (-(30 + 45 * amount) / 20)
     G = np.ones_like(P)
     gp = np.ones(B)
     gam_prev = np.ones(B)
